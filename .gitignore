@@ -1,0 +1,36 @@
+# Ambiente virtual
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDEs / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Segredos locais
+.env
+.env.*
+
+# Artefatos gerados pelo projeto (ETL / treino — recriar com run.bat)
+data/dados.parquet
+models/*.joblib
+
+# Streamlit
+.streamlit/secrets.toml

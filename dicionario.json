@@ -1,0 +1,50 @@
+[
+  {
+    "coluna": "RA",
+    "descricao": "Registro do Aluno (identificador único)."
+  },
+  {
+    "coluna": "Nome",
+    "descricao": "Nome do aluno."
+  },
+  {
+    "coluna": "Fase",
+    "descricao": "Fase escolar no programa (ex.: 1–8)."
+  },
+  {
+    "coluna": "Turma",
+    "descricao": "Turma (ex.: A, B, C, D)."
+  },
+  {
+    "coluna": "Ano",
+    "descricao": "Ano de referência do relatório (2020–2023)."
+  },
+  {
+    "coluna": "INDE",
+    "descricao": "Índice de Desenvolvimento Educacional."
+  },
+  {
+    "coluna": "IDA",
+    "descricao": "Indicador de Aprendizagem."
+  },
+  {
+    "coluna": "IAN",
+    "descricao": "Indicador de Adequação ao Nível."
+  },
+  {
+    "coluna": "IEG",
+    "descricao": "Indicador de Engajamento."
+  },
+  {
+    "coluna": "IPV",
+    "descricao": "Indicador de Ponto de Virada."
+  },
+  {
+    "coluna": "Pedra",
+    "descricao": "Nível Pedra: Quartzo, Ágata, Ametista ou Topázio."
+  },
+  {
+    "coluna": "risco",
+    "descricao": "Probabilidade estimada pelo modelo de ML de alto risco escolar (defasagem/evasão), entre 0 e 1. Para contar alunos em defasagem pelo modelo, use um limiar (ex.: risco >= 0.35)."
+  }
+]

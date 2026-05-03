@@ -11,6 +11,9 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from passos_magico.data_engine.loader import normalize_tabular_dataframe
+
 DATA_DIR = ROOT / "data"
 CSV_PATH = DATA_DIR / "relatorio.csv"
 PARQUET_PATH = DATA_DIR / "dados.parquet"
@@ -60,23 +63,22 @@ def main() -> None:
     for col in ["INDE", "IDA", "IAN", "IEG", "IPV"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = normalize_tabular_dataframe(df)
     # Score de ML (mesmo modelo da aba de risco), quando models/modelo.joblib existir
     if "risco" in df.columns:
         df = df.drop(columns=["risco"])
-    model_path = ROOT / "models" / "modelo.joblib"
-    if model_path.exists():
-        try:
-            from passos_magico.ml.inference import load_model_bundle, predict_risk_probabilities
+    try:
+        from passos_magico.ml.inference import load_model_bundle, predict_risk_probabilities
 
-            bundle = load_model_bundle(model_path)
-            df["risco"] = predict_risk_probabilities(bundle, df)
-        except Exception as e:
-            print(f"Aviso: não foi possível calcular coluna risco ({e}). Parquet sem ML.")
-    else:
+        bundle = load_model_bundle()
+        df["risco"] = predict_risk_probabilities(bundle, df)
+    except FileNotFoundError:
         print(
-            "Modelo ausente; Parquet sem coluna risco. "
-            "Execute scripts/train_model.py e rode este ETL novamente."
+            "Modelo ausente (modelo_risco_aluno.pkl na raiz ou models/modelo.joblib); "
+            "Parquet sem coluna risco."
         )
+    except Exception as e:
+        print(f"Aviso: não foi possível calcular coluna risco ({e}). Parquet sem ML.")
     PARQUET_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(PARQUET_PATH, index=False)
     cols = "com coluna risco (ML)" if "risco" in df.columns else "sem ML"

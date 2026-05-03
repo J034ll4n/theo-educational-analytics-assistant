@@ -22,6 +22,7 @@ CHART_TYPE_OPTIONS: list[tuple[str, str]] = [
 # Mapeia rótulo heurístico antigo → id preferido no seletor
 HEURISTIC_TO_CHART_ID: dict[str, str] = {
     "vazio": "auto",
+    "kpi": "auto",
     "linha": "linha",
     "barras": "barras_v",
     "histograma": "histograma",
@@ -120,6 +121,13 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
     num_cols, cat_cols = _column_groups(d)
 
     if chart_id == "auto":
+        # Uma linha só com métricas numéricas (sem eixo categórico): gráfico não agrega
+        if len(d) == 1 and len(num_cols) >= 1 and len(cat_cols) == 0:
+            msg = (
+                "Resultado único (indicador). O valor está na tabela e no resumo numérico "
+                "— não há série para visualizar."
+            )
+            return _empty_fig(msg), "kpi"
         # Barras (categoria + valor) primeiro: comparações público/particular, turmas, etc.
         if len(cat_cols) >= 1 and len(num_cols) >= 1:
             fig = px.bar(

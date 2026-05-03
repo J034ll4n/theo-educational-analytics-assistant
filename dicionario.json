@@ -1,50 +1,62 @@
 [
   {
     "coluna": "RA",
-    "descricao": "Registro do Aluno (identificador único)."
+    "tipo": "string",
+    "descricao": "Registro do Aluno. Identificador único do estudante no sistema (ex.: 'RA2020000', 'RA2020399')."
   },
   {
     "coluna": "Nome",
-    "descricao": "Nome do aluno."
+    "tipo": "string",
+    "descricao": "Nome do aluno anonimizado para privacidade (ex.: 'Aluno 1', 'Aluno 99')."
   },
   {
     "coluna": "Fase",
-    "descricao": "Fase escolar no programa (ex.: 1–8)."
+    "tipo": "int64",
+    "descricao": "Fase escolar na qual o aluno está alocado no programa educacional (ex.: 1 a 8)."
   },
   {
     "coluna": "Turma",
-    "descricao": "Turma (ex.: A, B, C, D)."
+    "tipo": "string",
+    "descricao": "Identificador categórico da turma do aluno (ex.: A, B, C, D)."
   },
   {
     "coluna": "Ano",
-    "descricao": "Ano de referência do relatório (2020–2023)."
+    "tipo": "int64",
+    "descricao": "Ano de referência da avaliação e coleta dos indicadores no histórico (ex.: 2020 a 2024)."
   },
   {
     "coluna": "INDE",
-    "descricao": "Índice de Desenvolvimento Educacional."
+    "tipo": "float64",
+    "descricao": "Índice de Desenvolvimento Educacional. É a métrica global principal que resume o desempenho do aluno."
   },
   {
     "coluna": "IDA",
-    "descricao": "Indicador de Aprendizagem."
+    "tipo": "float64",
+    "descricao": "Indicador de Aprendizagem. Avalia o desempenho puramente acadêmico do aluno, como notas em avaliações."
   },
   {
     "coluna": "IAN",
-    "descricao": "Indicador de Adequação ao Nível."
+    "tipo": "float64",
+    "descricao": "Indicador de Adequação ao Nível. Mede se a idade e o conhecimento do aluno estão nivelados com a fase em que ele se encontra."
   },
   {
     "coluna": "IEG",
-    "descricao": "Indicador de Engajamento."
+    "tipo": "float64",
+    "descricao": "Indicador de Engajamento. Mensura a participação, frequência e entrega de atividades propostas."
   },
   {
     "coluna": "IPV",
-    "descricao": "Indicador de Ponto de Virada."
+    "tipo": "float64",
+    "descricao": "Indicador de Ponto de Virada. Avalia o desenvolvimento psicossocial, a evolução comportamental e o potencial do aluno."
   },
   {
     "coluna": "Pedra",
-    "descricao": "Nível Pedra: Quartzo, Ágata, Ametista ou Topázio."
+    "tipo": "string",
+    "descricao": "Classificação categórica de desempenho baseada no INDE. Os níveis possíveis são: 'Quartzo', 'Ágata', 'Ametista' ou 'Topázio'."
   },
   {
     "coluna": "risco",
-    "descricao": "Probabilidade estimada pelo modelo de ML de alto risco escolar (defasagem/evasão), entre 0 e 1. Para contar alunos em defasagem pelo modelo, use um limiar (ex.: risco >= 0.35)."
+    "tipo": "float64",
+    "descricao": "Probabilidade estimada pelo modelo de machine learning de alto risco escolar (defasagem ou evasão), variando de 0.0 a 1.0. O limiar operacional usado no painel segue o treino (ex.: risco >= 0.46 para alto risco)."
   }
 ]

@@ -1,4 +1,6 @@
 @echo off
+REM O Windows nao permite icone proprio em ficheiros .bat. Para ver a imagem no atalho,
+REM execute criar_atalho.ps1 e use "Passos Mágicos.lnk" (ou arraste o .lnk para o Ambiente de Trabalho).
 setlocal
 cd /d "%~dp0"
 

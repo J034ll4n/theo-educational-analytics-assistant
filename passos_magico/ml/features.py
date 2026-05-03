@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -42,6 +44,49 @@ FEATURE_ORDER: list[str] = [
     "IPV",
     "Pedra_ord",
 ]
+
+
+def _year_series_for_sort(df: pd.DataFrame) -> pd.Series:
+    """Ano numérico para ordenar (mais recente = maior)."""
+    for c in ("Ano", "ano_referencia"):
+        if c in df.columns:
+            return pd.to_numeric(df[c], errors="coerce")
+    return pd.Series(np.nan, index=df.index)
+
+
+def pick_latest_year_row(sub: pd.DataFrame) -> pd.DataFrame:
+    """Uma linha do subconjunto: maior ano de referência; empate → primeira linha."""
+    if sub.empty:
+        return sub
+    if len(sub) == 1:
+        return sub.iloc[[0]]
+    y = _year_series_for_sort(sub)
+    if y.notna().any():
+        max_y = y.max()
+        tie = sub.loc[y == max_y]
+        return tie.iloc[[0]]
+    return sub.iloc[[0]]
+
+
+def latest_single_row_for_ra(df: pd.DataFrame, ra: str) -> pd.DataFrame:
+    """Filtra por RA e devolve uma linha (último ano disponível na base)."""
+    ra_col = "RA" if "RA" in df.columns else "ra"
+    if ra_col not in df.columns:
+        return pd.DataFrame()
+    sub = df[df[ra_col].astype(str) == str(ra)]
+    return pick_latest_year_row(sub)
+
+
+def latest_row_per_ra_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Uma linha por RA (último ano); para listas na UI sem duplicar aluno."""
+    ra_col = "RA" if "RA" in df.columns else "ra"
+    if ra_col not in df.columns or df.empty:
+        return df
+    work = df.copy()
+    work["_y"] = _year_series_for_sort(work)
+    work = work.sort_values("_y", ascending=False, na_position="last")
+    out = work.drop_duplicates(subset=[ra_col], keep="first")
+    return out.drop(columns=["_y"], errors="ignore")
 
 
 def augment_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -86,14 +131,18 @@ def vector_from_values(
     )
 
 
-def row_features_from_df(df: pd.DataFrame, ra: str) -> dict[str, float] | None:
-    sub = df[df["RA"].astype(str) == str(ra)]
+def row_features_from_df(df: pd.DataFrame, ra: str) -> dict[str, Any] | None:
+    ra_col = "RA" if "RA" in df.columns else "ra"
+    if ra_col not in df.columns:
+        return None
+    sub = latest_single_row_for_ra(df, ra)
     if sub.empty:
         return None
     row = sub.iloc[0]
-    aug = augment_dataframe(sub.head(1))
+    aug = augment_dataframe(sub)
     r = aug.iloc[0]
     return {
+        "RA": str(ra),
         "Fase": float(r["Fase"]),
         "Turma_ord": float(r["Turma_ord"]),
         "Ano": float(r["Ano"]),

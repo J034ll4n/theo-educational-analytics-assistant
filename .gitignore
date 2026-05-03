@@ -28,9 +28,19 @@ Thumbs.db
 .env
 .env.*
 
+# Contexto institucional local (Gamma / narrativa) — não versionar por defeito
+.passos_gamma_context.txt
+
+# Notebooks locais (outputs/caches agregados podem exceder centenas de MB). Versionar só se usar Git LFS.
+notebooks/
+
 # Artefatos gerados pelo projeto (ETL / treino — recriar com run.bat)
 data/dados.parquet
+data/resumo_anual.pdf
 models/*.joblib
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Atalho local (contém caminhos absolutos; recriar com criar_atalho.ps1)
+Passos Mágicos.lnk

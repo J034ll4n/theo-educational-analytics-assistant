@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
@@ -11,27 +12,43 @@ import shap
 
 from passos_magico.data_engine.loader import PROJECT_ROOT
 from passos_magico.ml.features import FEATURE_ORDER, augment_dataframe
+from passos_magico.ml.risk_pipeline import (
+    build_X_after_slider_simulation,
+    is_sklearn_risk_pipeline,
+    risk_X_matrix,
+    row_matrix_by_ra,
+)
 
-MODEL_PATH = PROJECT_ROOT / "models" / "modelo.joblib"
+PRIMARY_MODEL_PATH = PROJECT_ROOT / "modelo_risco_aluno.pkl"
+LEGACY_MODEL_PATH = PROJECT_ROOT / "models" / "modelo.joblib"
 
 
-def load_model_bundle(path: Path | None = None) -> dict:
-    p = path or MODEL_PATH
+def load_model_bundle(path: Path | None = None) -> Any:
+    if path is not None:
+        p = path
+    elif PRIMARY_MODEL_PATH.exists():
+        p = PRIMARY_MODEL_PATH
+    else:
+        p = LEGACY_MODEL_PATH
     if not p.exists():
         raise FileNotFoundError(
-            f"Modelo não encontrado em {p}. Execute scripts/train_model.py."
+            f"Modelo não encontrado. Coloque modelo_risco_aluno.pkl na raiz do projeto "
+            f"ou treine o legado: {LEGACY_MODEL_PATH}"
         )
-    bundle = joblib.load(p)
-    return bundle
+    return joblib.load(p)
 
 
-def _get_clf(bundle: dict):
-    if "clf" in bundle:
-        return bundle["clf"]
-    return bundle["model"]
+def _get_clf(bundle: dict | Any):
+    if isinstance(bundle, dict):
+        if "clf" in bundle:
+            return bundle["clf"]
+        return bundle["model"]
+    if is_sklearn_risk_pipeline(bundle):
+        return bundle.named_steps["clf"]
+    raise TypeError("Bundle de modelo não reconhecido.")
 
 
-def _x_df(feats: dict[str, float]) -> pd.DataFrame:
+def _x_df_legacy(feats: dict[str, float]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             [
@@ -50,39 +67,109 @@ def _x_df(feats: dict[str, float]) -> pd.DataFrame:
     )
 
 
-def predict_row_features(bundle: dict, feats: dict[str, float]) -> float:
+def predict_row_features(bundle: Any, feats: dict[str, float], df: pd.DataFrame | None = None) -> float:
+    if is_sklearn_risk_pipeline(bundle):
+        if df is None:
+            raise ValueError("predict_row_features com pipeline XGBoost requer o DataFrame de dados (`df`).")
+        ra = str(feats.get("RA", "")).strip()
+        if not ra:
+            raise ValueError("RA ausente em feats para predição com pipeline de risco.")
+        xm = row_matrix_by_ra(df, ra)
+        if xm is None:
+            return float("nan")
+        return float(bundle.predict_proba(xm)[0, 1])
     clf = _get_clf(bundle)
-    X_df = _x_df(feats)
-    proba = clf.predict_proba(X_df)[0, 1]
-    return float(proba)
+    row_feats = {k: float(feats[k]) for k in FEATURE_ORDER}
+    X_df = _x_df_legacy(row_feats)
+    return float(clf.predict_proba(X_df)[0, 1])
 
 
-def predict_risk_probabilities(bundle: dict, df: pd.DataFrame) -> np.ndarray:
+def predict_risk_probabilities(bundle: Any, df: pd.DataFrame) -> np.ndarray:
     """Probabilidade P(alto risco) por linha, na mesma ordem de `df`."""
-    d = augment_dataframe(df.copy())
-    if d.empty:
+    if df.empty:
         return np.array([], dtype=np.float64)
+    if is_sklearn_risk_pipeline(bundle):
+        X = risk_X_matrix(df)
+        return bundle.predict_proba(X)[:, 1].astype(np.float64)
+    d = augment_dataframe(df.copy())
     clf = _get_clf(bundle)
     X = d[FEATURE_ORDER].astype(float)
     return clf.predict_proba(X)[:, 1].astype(np.float64)
 
 
-def predict_risk_batch(bundle: dict, df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
-    clf = _get_clf(bundle)
-    d = augment_dataframe(df.loc[mask].copy())
-    if d.empty:
+def ensure_risco_column(df: pd.DataFrame, bundle: Any | None) -> pd.DataFrame:
+    """Garante coluna `risco` (0–1) alinhada ao modelo quando ainda não existir no DataFrame."""
+    if df.empty or bundle is None or "risco" in df.columns:
+        return df
+    try:
+        probs = predict_risk_probabilities(bundle, df)
+        out = df.copy()
+        out["risco"] = probs
+        return out
+    except Exception:
+        return df
+
+
+def predict_risk_batch(bundle: Any, df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
+    sub = df.loc[mask].copy()
+    if sub.empty:
         return pd.DataFrame(columns=["RA", "Nome", "Fase", "Turma", "Ano", "risco"])
-    X = d[FEATURE_ORDER].astype(float)
-    prob = clf.predict_proba(X)[:, 1]
-    out = d[["RA", "Nome", "Fase", "Turma", "Ano"]].copy()
-    out["risco"] = prob
+    ra_col = "RA" if "RA" in sub.columns else "ra"
+    nome_col = "Nome" if "Nome" in sub.columns else "nome"
+    f_col = "Fase" if "Fase" in sub.columns else "fase"
+    t_col = "Turma" if "Turma" in sub.columns else "turma"
+    ano_col = "Ano" if "Ano" in sub.columns else "ano_referencia"
+    if is_sklearn_risk_pipeline(bundle):
+        X = risk_X_matrix(sub)
+        prob = bundle.predict_proba(X)[:, 1]
+    else:
+        clf = _get_clf(bundle)
+        d = augment_dataframe(sub)
+        X = d[FEATURE_ORDER].astype(float)
+        prob = clf.predict_proba(X)[:, 1]
+    out = pd.DataFrame(
+        {
+            "RA": sub[ra_col].astype(str),
+            "Nome": sub[nome_col].astype(str) if nome_col in sub.columns else "",
+            "Fase": sub[f_col],
+            "Turma": sub[t_col] if t_col in sub.columns else "",
+            "Ano": sub[ano_col] if ano_col in sub.columns else pd.NA,
+            "risco": prob,
+        }
+    )
     return out.sort_values("risco", ascending=False)
 
 
-def explain_row_shap(bundle: dict, feats: dict[str, float]) -> list[tuple[str, float]]:
-    """Valores SHAP (TreeExplainer) por feature; fallback em importâncias."""
+def explain_row_shap(bundle: Any, feats: dict[str, float], df: pd.DataFrame | None = None) -> list[tuple[str, float]]:
+    if is_sklearn_risk_pipeline(bundle):
+        if df is None:
+            return []
+        ra = str(feats.get("RA", "")).strip()
+        xm = row_matrix_by_ra(df, ra) if ra else None
+        if xm is None or xm.empty:
+            return []
+        pre = bundle.named_steps["pre"]
+        clf = bundle.named_steps["clf"]
+        Xt = pre.transform(xm)
+        names = list(pre.get_feature_names_out())
+        names = [n.split("__")[-1] for n in names]
+        try:
+            explainer = shap.TreeExplainer(clf)
+            shap_vals = explainer.shap_values(Xt)
+            if isinstance(shap_vals, list):
+                shap_vals = shap_vals[1]
+            sv = np.asarray(shap_vals).reshape(-1)
+            if sv.size != len(names):
+                sv = np.asarray(shap_vals[0]).reshape(-1)
+            pairs = list(zip(names, [float(x) for x in sv], strict=False))
+        except Exception:
+            imp = getattr(clf, "feature_importances_", np.ones(len(names)) / len(names))
+            pairs = list(zip(names, [float(x) for x in imp], strict=False))
+        pairs.sort(key=lambda x: abs(x[1]), reverse=True)
+        return pairs
     clf = _get_clf(bundle)
-    X_df = _x_df(feats)
+    row_feats = {k: float(feats[k]) for k in FEATURE_ORDER}
+    X_df = _x_df_legacy(row_feats)
     try:
         explainer = shap.TreeExplainer(clf)
         shap_vals = explainer.shap_values(X_df)
@@ -97,3 +184,15 @@ def explain_row_shap(bundle: dict, feats: dict[str, float]) -> list[tuple[str, f
         pairs = list(zip(FEATURE_ORDER, [float(x) for x in imp], strict=True))
     pairs.sort(key=lambda x: abs(x[1]), reverse=True)
     return pairs
+
+
+def predict_row_after_simulation(bundle: Any, df: pd.DataFrame, ra: str, sim: dict[str, float]) -> float:
+    if not is_sklearn_risk_pipeline(bundle):
+        clf = _get_clf(bundle)
+        row_feats = {k: float(sim[k]) for k in FEATURE_ORDER}
+        X_df = _x_df_legacy(row_feats)
+        return float(clf.predict_proba(X_df)[0, 1])
+    xm = build_X_after_slider_simulation(df, ra, sim)
+    if xm is None:
+        return float("nan")
+    return float(bundle.predict_proba(xm)[0, 1])

@@ -8,6 +8,8 @@ from pathlib import Path
 from passos_magico.data_engine.loader import PROJECT_ROOT
 
 DICT_PATH = PROJECT_ROOT / "dicionario.json"
+RESUMO_ANUAL_PATH = PROJECT_ROOT / "resumo_anual.txt"
+GAMMA_CONTEXT_PATH = PROJECT_ROOT / ".passos_gamma_context.txt"
 
 
 def default_dictionary_rows() -> list[dict]:
@@ -58,7 +60,7 @@ def default_dictionary_rows() -> list[dict]:
         },
         {
             "coluna": "risco",
-            "descricao": "Probabilidade estimada pelo modelo de ML de alto risco escolar (defasagem/evasão), entre 0 e 1. Para contar alunos em defasagem pelo modelo, use um limiar (ex.: risco >= 0.35).",
+            "descricao": "Probabilidade estimada pelo modelo de ML de alto risco escolar (defasagem/evasão), entre 0 e 1. Na UI, o limiar operacional de alto risco segue o treino (ex.: risco >= 0.46).",
         },
     ]
 
@@ -90,3 +92,58 @@ def rows_to_prompt_block(rows: list[dict]) -> str:
         desc = r.get("descricao", "")
         lines.append(f"- **{col}**: {desc}")
     return "\n".join(lines)
+
+
+def load_annual_summary_text() -> str:
+    """Texto livre do resumo anual; vazio se o arquivo ainda não existir."""
+    if not RESUMO_ANUAL_PATH.exists():
+        return ""
+    try:
+        return RESUMO_ANUAL_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def load_gamma_context_text() -> str:
+    """Texto institucional (ex.: export Gamma); vazio se o ficheiro não existir."""
+    if not GAMMA_CONTEXT_PATH.exists():
+        return ""
+    try:
+        return GAMMA_CONTEXT_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def save_annual_summary_text(text: str) -> None:
+    RESUMO_ANUAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    body = text.strip()
+    RESUMO_ANUAL_PATH.write_text(body + ("\n" if body else ""), encoding="utf-8")
+
+
+def merge_theo_context_blocks(
+    dictionary_block: str, annual_plain: str, gamma_plain: str
+) -> str:
+    """Junta dicionário, resumo anual (`resumo_anual.txt`) e texto Gamma opcional para o contexto do Theo."""
+    out = dictionary_block
+    annual_plain = annual_plain.strip()
+    gamma_plain = gamma_plain.strip()
+    if annual_plain:
+        out += (
+            "\n\n### Resumo anual institucional (PEDE_PASSOS)\n"
+            + annual_plain
+            + "\n\n---\n**Uso deste bloco:** absorva prioridades, datas, conquistas e linguagem institucional para o storytelling e para interpretar os dados. "
+            "Valores agregados (médias, contagens, comparações) devem vir da consulta SQL na tabela **dados**, salvo quando o gestor pedir reflexão explícita só sobre este texto."
+        )
+    if gamma_plain:
+        out += (
+            "\n\n### Contexto narrativo (Gamma / relatório anual)\n"
+            + gamma_plain
+            + "\n\n---\n**Uso deste bloco:** use para storytelling e alinhamento institucional; **não** trate nomes ou números deste texto como colunas da tabela **dados**. "
+            "Métricas e listagens devem continuar a vir exclusivamente do SQL sobre **dados**, salvo pedido explícito de reflexão só sobre este texto."
+        )
+    return out
+
+
+def merge_dictionary_and_annual(dictionary_block: str, annual_plain: str) -> str:
+    """Compat: dicionário + resumo anual (sem bloco Gamma)."""
+    return merge_theo_context_blocks(dictionary_block, annual_plain, "")

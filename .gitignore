@@ -31,8 +31,8 @@ Thumbs.db
 # Contexto institucional local (Gamma / narrativa) — não versionar por defeito
 .passos_gamma_context.txt
 
-# Notebooks locais (outputs/caches agregados podem exceder centenas de MB). Versionar só se usar Git LFS.
-notebooks/
+# Ambiente Python acidental dentro de notebooks (não versionar; usar .venv na raiz).
+notebooks/venv/
 
 # Artefatos gerados pelo projeto (ETL / treino — recriar com run.bat)
 data/dados.parquet

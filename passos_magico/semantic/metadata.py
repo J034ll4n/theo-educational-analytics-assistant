@@ -10,6 +10,8 @@ from passos_magico.data_engine.loader import PROJECT_ROOT
 DICT_PATH = PROJECT_ROOT / "dicionario.json"
 RESUMO_ANUAL_PATH = PROJECT_ROOT / "resumo_anual.txt"
 GAMMA_CONTEXT_PATH = PROJECT_ROOT / ".passos_gamma_context.txt"
+# Texto espelho do relatório web (Gamma); substitua ao atualizar o site (export Markdown / copy-paste).
+ASSET_GAMMA_CONTEXT_PATH = PROJECT_ROOT / "assets" / "relatorio_gamma_context.md"
 
 
 def default_dictionary_rows() -> list[dict]:
@@ -86,11 +88,17 @@ def save_dictionary(rows: list[dict], path: Path | None = None) -> None:
 
 
 def rows_to_prompt_block(rows: list[dict]) -> str:
-    lines = ["### Dicionário de colunas (PEDE_PASSOS)"]
+    lines = [
+        "### Dicionário de colunas (PEDE_PASSOS)",
+        "**Fonte do esquema:** Parquet carregado na app (view `dados` no SQL). O ficheiro `relatorio.csv` é apenas entrada ao ETL, **não** é a tabela consultada pelo Theo.",
+    ]
     for r in rows:
         col = r.get("coluna", "")
         desc = r.get("descricao", "")
         lines.append(f"- **{col}**: {desc}")
+    lines.append(
+        "- **Proibido** inventar colunas de texto institucional (`feedback`, `comentario`, `resumo_anual`, etc.); métricas vêm só destas colunas."
+    )
     return "\n".join(lines)
 
 
@@ -105,19 +113,40 @@ def load_annual_summary_text() -> str:
 
 
 def load_gamma_context_text() -> str:
-    """Texto institucional (ex.: export Gamma); vazio se o ficheiro não existir."""
-    if not GAMMA_CONTEXT_PATH.exists():
-        return ""
-    try:
-        return GAMMA_CONTEXT_PATH.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
+    """Texto do relatório (site Gamma) para o Theo. Ordem: override local, depois cópia em `assets/`."""
+    for path in (GAMMA_CONTEXT_PATH, ASSET_GAMMA_CONTEXT_PATH):
+        if path.exists():
+            try:
+                return path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+    return ""
 
 
 def save_annual_summary_text(text: str) -> None:
     RESUMO_ANUAL_PATH.parent.mkdir(parents=True, exist_ok=True)
     body = text.strip()
     RESUMO_ANUAL_PATH.write_text(body + ("\n" if body else ""), encoding="utf-8")
+
+
+# Cabeçalho exatamente como em `merge_theo_context_blocks` — usado para cortar o Gamma no prompt de SQL/insight.
+GAMMA_CONTEXT_SECTION_PREFIX = "\n\n### Contexto narrativo (Gamma / relatório anual)\n"
+
+
+def context_without_gamma_narrative(merged_block: str) -> str:
+    """
+    Remove o texto longo do relatório Gamma do contexto enviado ao modelo nas etapas **SQL** e **insight tabular**.
+
+    O ficheiro Gamma contém storytelling e números ilustrativos; recitar isso gerava AUC/clusters fictícios na resposta.
+    Mantém dicionário + resumo anual institucional.
+    """
+    s = (merged_block or "").strip()
+    i = s.find(GAMMA_CONTEXT_SECTION_PREFIX)
+    if i == -1:
+        i = s.find("\n\n### Contexto narrativo (Gamma")
+    if i != -1:
+        return s[:i].rstrip()
+    return s
 
 
 def merge_theo_context_blocks(
@@ -136,10 +165,11 @@ def merge_theo_context_blocks(
         )
     if gamma_plain:
         out += (
-            "\n\n### Contexto narrativo (Gamma / relatório anual)\n"
+            GAMMA_CONTEXT_SECTION_PREFIX
             + gamma_plain
             + "\n\n---\n**Uso deste bloco:** use para storytelling e alinhamento institucional; **não** trate nomes ou números deste texto como colunas da tabela **dados**. "
-            "Métricas e listagens devem continuar a vir exclusivamente do SQL sobre **dados**, salvo pedido explícito de reflexão só sobre este texto."
+            "Métricas e listagens devem continuar a vir exclusivamente do SQL sobre **dados**, salvo pedido explícito de reflexão só sobre este texto. "
+            "(Nas etapas automáticas de SQL e de interpretação da tabela, este trecho longo é omitido para não misturar cifras fictícias com a consulta.)"
         )
     return out
 

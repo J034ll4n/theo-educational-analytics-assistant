@@ -385,6 +385,22 @@ GLOBAL_CSS = f"""
     section[data-testid="stMain"] .block-container {{
         padding-bottom: 4rem;
     }}
+    /*
+     * Abas (st.tabs): o Base Web às vezes deixa painéis ou blocos internos com opacidade < 1,
+     * o que faz a «Matriz de priorização» parecer apagada. Forçar leitura normal no conteúdo das abas.
+     */
+    section[data-testid="stMain"] div[data-testid="stTabs"] [role="tabpanel"],
+    section[data-testid="stMain"] div[data-testid="stTabs"] [data-baseweb="tab-panel"] {{
+        opacity: 1 !important;
+    }}
+    section[data-testid="stMain"] div[data-testid="stTabs"] [role="tabpanel"] > div,
+    section[data-testid="stMain"] div[data-testid="stTabs"] [data-baseweb="tab-panel"] > div {{
+        opacity: 1 !important;
+    }}
+    section[data-testid="stMain"] div[data-testid="stTabs"] div[data-testid="stVerticalBlock"],
+    section[data-testid="stMain"] div[data-testid="stTabs"] div[data-testid="stHorizontalBlock"] {{
+        opacity: 1 !important;
+    }}
     /* Página Previsão de risco — só na área principal (evita conflito com sidebar) */
     section[data-testid="stMain"] .pm-risk-page-header {{
         font-size: 0.92rem;

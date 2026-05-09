@@ -1,14 +1,21 @@
-"""Cliente Ollama via LangChain."""
+"""Cliente Ollama via LangChain.
+
+LangChain só é importado quando se chama `get_chat_ollama` / `invoke_string` / `stream_tokens`,
+para a app (ex.: dashboards) arrancar sem essas dependências no MVP / Streamlit Cloud.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
 import requests
-from langchain_community.chat_models import ChatOllama
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from passos_magico.llm.config import OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX
+from passos_magico.llm.config import (
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    OLLAMA_NUM_CTX,
+    OLLAMA_REQUEST_TIMEOUT,
+)
 
 
 def ollama_available() -> bool:
@@ -19,19 +26,24 @@ def ollama_available() -> bool:
         return False
 
 
-def get_chat_ollama(**kwargs: Any) -> ChatOllama:
+def get_chat_ollama(**kwargs: Any) -> Any:
+    from langchain_community.chat_models import ChatOllama
+
     opts = {
         "base_url": OLLAMA_BASE_URL,
         "model": OLLAMA_MODEL,
         "num_ctx": OLLAMA_NUM_CTX,
+        "timeout": OLLAMA_REQUEST_TIMEOUT,
     }
     opts.update(kwargs)
     return ChatOllama(**opts)
 
 
 def invoke_string(system: str, user: str, temperature: float = 0.1) -> str:
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
     chat = get_chat_ollama(temperature=temperature)
-    messages: list[BaseMessage] = [
+    messages = [
         SystemMessage(content=system),
         HumanMessage(content=user),
     ]
@@ -42,6 +54,8 @@ def invoke_string(system: str, user: str, temperature: float = 0.1) -> str:
 
 
 def stream_tokens(system: str, user: str, temperature: float = 0.2):
+    from langchain_core.messages import HumanMessage, SystemMessage
+
     chat = get_chat_ollama(temperature=temperature)
     messages = [
         SystemMessage(content=system),

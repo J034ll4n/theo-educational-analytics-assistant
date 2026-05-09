@@ -64,18 +64,19 @@ def risk_explain_lines(
         )
     if not lines:
         if ps > zone_low:
+            # Alinhado ao painel: ≤46% é a mesma «faixa verde» — evitar «atenção moderada» que soava a alerta forte.
             lines.append(
-                f"A estimativa fica entre **cerca de {zone_low * 100:.0f}% e {threshold * 100:.0f}%** "
-                f"(hoje **{pct:.0f}%**) — **atenção moderada**. Cruze com outros dados e com a equipe."
+                f"Com **{pct:.0f}%**, a estimativa continua **até {threshold * 100:.0f}%** na escala deste painel "
+                f"(entre **~{zone_low * 100:.0f}%** e esse teto). É apoio à conversa — combine com o gráfico de fatores e com a equipe."
             )
         else:
             lines.append(
                 f"A estimativa fica **abaixo de cerca de {zone_low * 100:.0f}%** neste cenário (hoje **{pct:.0f}%**) — "
-                "leitura mais baixa no modelo; continue cruzando com o que a escola observa no dia a dia."
+                "entre as leituras **mais baixas** nesta escala; mesmo assim, cruze com o que a escola observa no dia a dia."
             )
     elif zone_low < ps <= threshold:
         lines.append(
-            f"Com **{zone_low * 100:.0f}% a {threshold * 100:.0f}%** a leitura fica na faixa de **atenção moderada** "
-            f"(hoje **{pct:.0f}%**); use também o gráfico de fatores e o contexto da sala."
+            f"Com **{pct:.0f}%**, o número fica entre **~{zone_low * 100:.0f}%** e **{threshold * 100:.0f}%** nesta escala — "
+            "ainda na **mesma faixa verde** do painel; use o gráfico de fatores e o contexto da sala com a equipe."
         )
     return lines

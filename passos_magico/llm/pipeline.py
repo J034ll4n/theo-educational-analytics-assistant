@@ -9,7 +9,9 @@ import pandas as pd
 
 from passos_magico.data_engine.query import run_sql as default_run_sql
 from passos_magico.data_engine.query import validate_select_only
+from passos_magico.semantic.metadata import context_without_gamma_narrative
 from passos_magico.llm.charts import dataframe_to_figure
+from passos_magico.llm.error_messages import humanize_sql_execution_error
 from passos_magico.llm.ollama_client import invoke_string
 from passos_magico.llm.prompts import (
     INSIGHT_SYSTEM,
@@ -30,8 +32,10 @@ from passos_magico.llm.prompts import (
 from passos_magico.llm.insight_mode import infer_insight_response_mode
 from passos_magico.llm.kpi_narration import kpi_narration_block
 from passos_magico.llm.sql_parse import (
+    SUGGESTION_FALLBACK,
     extract_json_suggestions,
     extract_sql_block,
+    sql_guard_disallowed_tokens,
     sql_passes_quick_validation,
 )
 
@@ -60,6 +64,7 @@ def sql_and_chart_step(
     sql_context_df: pd.DataFrame | None = None,
 ) -> ChatTurnResult:
     """Etapa 1–2: gera SQL, executa e monta gráfico (sem insight/sugestões)."""
+    dictionary_block = context_without_gamma_narrative(dictionary_block)
     if not ollama_ok:
         return ChatTurnResult(
             sql=None,
@@ -117,6 +122,34 @@ def sql_and_chart_step(
                 "SQL extraído parece incompleto (parênteses desbalanceados, falta FROM dados, "
                 "ou estrutura de CTE quebrada)."
             )
+            if fix_round < _MAX_FIX_TRIES - 1:
+                raw_fix = invoke_string(
+                    sys_sql_fix,
+                    build_sql_execution_fix_user_message(
+                        user_question,
+                        dictionary_block,
+                        sql,
+                        last_exec_error,
+                        dados_columns=dados_columns,
+                    ),
+                    temperature=0.02,
+                )
+                new_sql = extract_sql_block(raw_fix)
+                sql = new_sql if new_sql else sql
+                continue
+            return ChatTurnResult(
+                sql=sql,
+                df=None,
+                sql_error=last_exec_error,
+                figure=None,
+                chart_kind="erro",
+                insight_text="",
+                suggestions=[],
+            )
+
+        okg, gerr = sql_guard_disallowed_tokens(sql, dados_columns)
+        if not okg:
+            last_exec_error = gerr
             if fix_round < _MAX_FIX_TRIES - 1:
                 raw_fix = invoke_string(
                     sys_sql_fix,
@@ -212,7 +245,17 @@ def suggestions_step(user_question: str, insight_full: str) -> list[str]:
         build_suggestions_user(user_question, insight_full[:800]),
         temperature=0.15,
     )
-    return extract_json_suggestions(sug_raw)
+    sugs = extract_json_suggestions(sug_raw)
+    if tuple(sugs) == SUGGESTION_FALLBACK:
+        sug_raw2 = invoke_string(
+            SUGGESTIONS_SYSTEM,
+            build_suggestions_user(user_question, insight_full[:800]),
+            temperature=0.05,
+        )
+        sugs2 = extract_json_suggestions(sug_raw2)
+        if tuple(sugs2) != SUGGESTION_FALLBACK:
+            return sugs2
+    return sugs
 
 
 def run_analytical_turn(
@@ -229,8 +272,8 @@ def run_analytical_turn(
             figure=None,
             chart_kind="erro",
             insight_text=(
-                "**Theo:** Não foi possível conectar ao Ollama. "
-                "Confira se o servidor está em execução e se o modelo configurado foi baixado (`ollama pull`)."
+                "**Theo:** Não consegui ligar ao **Ollama** neste momento. "
+                "Confirme que o serviço está a correr e que já fez o download do modelo (`ollama pull` com o nome certo)."
             ),
             suggestions=[
                 "Após iniciar o Ollama, repita sua pergunta.",
@@ -249,8 +292,8 @@ def run_analytical_turn(
                 figure=None,
                 chart_kind="erro",
                 insight_text=(
-                    "**Theo:** Não consegui gerar uma consulta válida. "
-                    "Reformule a pergunta ou seja mais específico sobre ano, fase ou indicador."
+                    "**Theo:** Não consegui **montar a consulta** a partir da sua pergunta. "
+                    "Experimente ser mais concreto: **ano** (ex.: 2022), **fase**, **turma** ou um **indicador** (INDE, IDA, …)."
                 ),
                 suggestions=[
                     "Média de IDA por Fase no ano 2022",
@@ -265,7 +308,7 @@ def run_analytical_turn(
                 sql_error=base.sql_error,
                 figure=None,
                 chart_kind="erro",
-                insight_text=f"**Theo:** A consulta gerada não passou na validação: {base.sql_error}",
+                insight_text="**Theo:** " + humanize_sql_execution_error(str(base.sql_error)),
                 suggestions=[
                     "Repetir com filtros explícitos (Ano, Fase).",
                     "Pedir apenas uma agregação simples.",
@@ -279,9 +322,7 @@ def run_analytical_turn(
                 sql_error=base.sql_error,
                 figure=None,
                 chart_kind="erro",
-                insight_text=(
-                    f"**Theo:** Erro ao executar a consulta. Detalhes: `{base.sql_error}`."
-                ),
+                insight_text="**Theo:** " + humanize_sql_execution_error(str(base.sql_error)),
                 suggestions=[
                     "Listar média de IDA por Ano",
                     "Contar alunos por Pedra",
@@ -304,7 +345,7 @@ def run_analytical_turn(
     insight = invoke_string(
         THEO_SYSTEM_BASE + INSIGHT_SYSTEM,
         insight_user,
-        temperature=0.15,
+        temperature=0.05,
     )
     sugs = suggestions_step(user_question, insight)
     return ChatTurnResult(
@@ -341,7 +382,32 @@ def stream_insight_text(
     yield from stream_tokens(
         THEO_SYSTEM_BASE + INSIGHT_SYSTEM,
         insight_user,
-        temperature=0.15,
+        temperature=0.05,
+    )
+
+
+def invoke_insight_text(
+    user_question: str,
+    theo_context_block: str,
+    df: pd.DataFrame,
+    chart_kind: str,
+) -> str:
+    """Mesma lógica que `stream_insight_text`, mas numa única resposta (fallback se o stream vier curto)."""
+    preview = _df_preview(df)
+    kpi_block = kpi_narration_block(df)
+    insight_mode = infer_insight_response_mode(df, chart_kind)
+    insight_user = build_insight_user(
+        user_question,
+        preview,
+        chart_kind,
+        theo_context_block=theo_context_block,
+        kpi_automatico=kpi_block,
+        insight_mode=insight_mode,
+    )
+    return invoke_string(
+        THEO_SYSTEM_BASE + INSIGHT_SYSTEM,
+        insight_user,
+        temperature=0.05,
     )
 
 

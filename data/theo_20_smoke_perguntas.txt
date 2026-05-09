@@ -1,0 +1,23 @@
+# 20 perguntas smoke para o chatbot Theo (copiar/colar na UI ou alinhar com pytest -m ollama).
+# IDs no catálogo: b1 b4 b11 m2 m8 e2 e6 c3 r2 r6 i2 i6 x3 x10 k2 k6 s4 s5 e3 r1
+
+Quantos registros existem na base no total?
+Qual o valor médio de INDE considerando todos os registros?
+Qual o ano mínimo e o ano máximo presentes na base?
+Média de INDE por Turma no ano 2023.
+Média de IDA por Ano (todos os anos).
+Contagem de registros por Ano ordenada.
+Evolução da média de IDA por Ano.
+Média de INDE por tipo de rede no último ano (2024).
+Média de risco por Fase em 2023.
+Quantos registros com risco entre 0.3 e 0.6?
+Média do ano de nascimento (a partir de data_nasc).
+Contagem de alunos com data de nascimento válida em 2024.
+Em 2024, correlação simples: média de INDE e IDA por Turma.
+Em 2022, média de IAN e de IPV por Fase.
+Fase com menor média de INDE em 2021 (apenas uma linha).
+As 3 turmas com menor média de INDE em 2021.
+Média de INDE em 2024 apenas para quem tem risco abaixo de 0.5.
+Em 2022, média de IDA por turma vs média global da rede (pública/particular).
+Para o RA-MUD, como evolui o INDE ao longo dos anos?
+Quantos alunos têm risco do modelo >= 0.46?

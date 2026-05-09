@@ -16,24 +16,18 @@ from passos_magico.ml.risk_pipeline import (
     build_X_after_slider_simulation,
     is_sklearn_risk_pipeline,
     risk_X_matrix,
-    row_matrix_by_ra,
+    row_matrix_for_ficha_feats,
 )
 
 PRIMARY_MODEL_PATH = PROJECT_ROOT / "modelo_risco_aluno.pkl"
-LEGACY_MODEL_PATH = PROJECT_ROOT / "models" / "modelo.joblib"
 
 
 def load_model_bundle(path: Path | None = None) -> Any:
-    if path is not None:
-        p = path
-    elif PRIMARY_MODEL_PATH.exists():
-        p = PRIMARY_MODEL_PATH
-    else:
-        p = LEGACY_MODEL_PATH
+    p = path if path is not None else PRIMARY_MODEL_PATH
     if not p.exists():
         raise FileNotFoundError(
-            f"Modelo não encontrado. Coloque modelo_risco_aluno.pkl na raiz do projeto "
-            f"ou treine o legado: {LEGACY_MODEL_PATH}"
+            f"Modelo não encontrado: {p}. Treine com o notebook "
+            f"`notebooks/Ml/ML_Passos_Magicos.ipynb` e grave `modelo_risco_aluno.pkl` na raiz do projeto."
         )
     return joblib.load(p)
 
@@ -74,8 +68,8 @@ def predict_row_features(bundle: Any, feats: dict[str, float], df: pd.DataFrame 
         ra = str(feats.get("RA", "")).strip()
         if not ra:
             raise ValueError("RA ausente em feats para predição com pipeline de risco.")
-        xm = row_matrix_by_ra(df, ra)
-        if xm is None:
+        xm = row_matrix_for_ficha_feats(df, feats)
+        if xm is None or xm.empty:
             return float("nan")
         return float(bundle.predict_proba(xm)[0, 1])
     clf = _get_clf(bundle)
@@ -110,10 +104,11 @@ def ensure_risco_column(df: pd.DataFrame, bundle: Any | None) -> pd.DataFrame:
         return df
 
 
-def predict_risk_batch(bundle: Any, df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
-    sub = df.loc[mask].copy()
+def predict_risk_slice(bundle: Any, sub: pd.DataFrame) -> pd.DataFrame:
+    """Probabilidade de risco por linha de `sub` (já recortado), na ordem do modelo; ordena do maior para o menor."""
     if sub.empty:
         return pd.DataFrame(columns=["RA", "Nome", "Fase", "Turma", "Ano", "risco"])
+    sub = sub.copy()
     ra_col = "RA" if "RA" in sub.columns else "ra"
     nome_col = "Nome" if "Nome" in sub.columns else "nome"
     f_col = "Fase" if "Fase" in sub.columns else "fase"
@@ -140,12 +135,16 @@ def predict_risk_batch(bundle: Any, df: pd.DataFrame, mask: pd.Series) -> pd.Dat
     return out.sort_values("risco", ascending=False)
 
 
+def predict_risk_batch(bundle: Any, df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
+    return predict_risk_slice(bundle, df.loc[mask].copy())
+
+
 def explain_row_shap(bundle: Any, feats: dict[str, float], df: pd.DataFrame | None = None) -> list[tuple[str, float]]:
     if is_sklearn_risk_pipeline(bundle):
         if df is None:
             return []
         ra = str(feats.get("RA", "")).strip()
-        xm = row_matrix_by_ra(df, ra) if ra else None
+        xm = row_matrix_for_ficha_feats(df, feats) if ra else None
         if xm is None or xm.empty:
             return []
         pre = bundle.named_steps["pre"]

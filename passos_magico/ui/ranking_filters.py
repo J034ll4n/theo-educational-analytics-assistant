@@ -65,11 +65,30 @@ def ranking_turma_letter_options(df: pd.DataFrame) -> list[str]:
     return sorted(letters)
 
 
-def ranking_mask(df: pd.DataFrame, fase: int, turma_letter: str) -> pd.Series:
-    """Máscara alinhada à normalização usada nas opções (evita falhas Fase 8 vs «8»)."""
-    fi = series_fase_int(df["Fase"]) == int(fase)
+def ranking_turma_letter_options_for_fase(df: pd.DataFrame, fase: int | None) -> list[str]:
+    """Letras de turma que **existem** no recorte (fase fixa ou todas as fases). Evita combinação fase×turma impossível na UI."""
+    if fase is None:
+        return ranking_turma_letter_options(df)
+    if "Fase" not in df.columns or "Turma" not in df.columns:
+        return ranking_turma_letter_options(df)
+    sub = df.loc[series_fase_int(df["Fase"]) == int(fase)]
+    if sub.empty:
+        return []
+    return ranking_turma_letter_options(sub)
+
+
+def ranking_mask(df: pd.DataFrame, fase: int | None, turma_letter: str) -> pd.Series:
+    """Máscara alinhada à normalização usada nas opções. `fase=None` = todas as fases."""
+    if fase is not None and "Fase" not in df.columns:
+        return pd.Series(False, index=df.index)
+    if fase is None:
+        fi = pd.Series(True, index=df.index)
+    else:
+        fi = series_fase_int(df["Fase"]) == int(fase)
     t = (turma_letter or "").strip().upper()[:1]
     if not t or t not in _LETTER_TO_ORD:
         return fi
+    if "Turma" not in df.columns:
+        return pd.Series(False, index=df.index)
     wo = _LETTER_TO_ORD[t]
     return fi & (series_turma_ord(df["Turma"]) == wo)

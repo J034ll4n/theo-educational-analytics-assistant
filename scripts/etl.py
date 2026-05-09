@@ -64,7 +64,7 @@ def main() -> None:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     df = normalize_tabular_dataframe(df)
-    # Score de ML (mesmo modelo da aba de risco), quando models/modelo.joblib existir
+    # Score de ML (mesmo modelo da aba de risco), quando modelo_risco_aluno.pkl existir na raiz
     if "risco" in df.columns:
         df = df.drop(columns=["risco"])
     try:
@@ -74,7 +74,7 @@ def main() -> None:
         df["risco"] = predict_risk_probabilities(bundle, df)
     except FileNotFoundError:
         print(
-            "Modelo ausente (modelo_risco_aluno.pkl na raiz ou models/modelo.joblib); "
+            "Modelo ausente (modelo_risco_aluno.pkl na raiz do projeto); "
             "Parquet sem coluna risco."
         )
     except Exception as e:

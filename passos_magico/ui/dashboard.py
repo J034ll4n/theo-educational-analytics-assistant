@@ -12,24 +12,19 @@ import streamlit as st
 
 from passos_magico.ml.inference import predict_risk_probabilities
 from passos_magico.ml.risk_display import OPERATIONAL_HIGH_RISK_THRESHOLD
+from passos_magico.ui.dashboard_catalog import IAN_ADEQUACAO, INDICATOR_CATALOG
+from passos_magico.ui.dashboard_feedback import render_dashboard_theo_feedback
 
-_PM_ACCENT = "#EE145B"
-_PM_CYAN = "#00d4d8"
+# Paleta alinhada ao fundo escuro da app (.stApp ≈ #121218)
+_DASH_ACCENT = "#EE145B"
+_DASH_ACCENT2 = "#00d4d8"
+_DASH_TEXT = "#e6edf3"
+_DASH_MUTED = "#94a3b8"
+_DASH_GRID = "rgba(255,255,255,0.08)"
+_DASH_PAPER = "#121218"
+_DASH_PLOT_BG = "#16161d"
 
 RISKO_LIMIAR: float = OPERATIONAL_HIGH_RISK_THRESHOLD
-
-INDICATOR_CATALOG: list[tuple[str, str]] = [
-    ("INDE", "Índice de Desenvolvimento Educacional"),
-    ("IDA", "Desempenho académico (aprendizagem)"),
-    ("IAN", "Adequação ao nível"),
-    ("IEG", "Engajamento"),
-    ("IPV", "Ponto de virada"),
-    ("IPS", "Índice psicossocial"),
-    ("IPP", "Índice pedagógico complementar"),
-    ("risco", "Probabilidade de alto risco (modelo ML)"),
-]
-
-IAN_ADEQUACAO = 6.5
 
 
 def _ensure_risco(df: pd.DataFrame, bundle: dict[str, Any]) -> pd.DataFrame:
@@ -54,20 +49,56 @@ def _numeric_indicators_in_df(df: pd.DataFrame) -> list[str]:
     return out
 
 
-def _pm_figure_layout(fig: go.Figure, title: str, *, height: int = 380) -> go.Figure:
+def _dash_figure_layout(
+    fig: go.Figure,
+    title: str,
+    *,
+    height: int = 380,
+    calendar_year_x: bool = False,
+    calendar_year_y: bool = False,
+) -> go.Figure:
+    """Gráficos com fundo escuro, alinhados à página Streamlit."""
     fig.update_layout(
         template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(30,30,36,0.9)",
-        font=dict(color="#e6edf3", size=12),
-        title=dict(text=title, font=dict(size=14), x=0, xanchor="left"),
-        margin=dict(l=48, r=24, t=48, b=48),
+        paper_bgcolor=_DASH_PAPER,
+        plot_bgcolor=_DASH_PLOT_BG,
+        font=dict(color=_DASH_TEXT, size=12, family="Inter, Segoe UI, system-ui, sans-serif"),
+        title=dict(text=title, font=dict(size=15, color=_DASH_TEXT), x=0.02, xanchor="left"),
+        margin=dict(l=52, r=28, t=56, b=48),
         height=height,
-        colorway=[_PM_ACCENT, _PM_CYAN, "#79c0ff"],
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        colorway=[_DASH_ACCENT, _DASH_ACCENT2, "#79c0ff", "#fbbf24"],
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            bgcolor="rgba(22, 24, 30, 0.92)",
+            bordercolor="rgba(238, 20, 91, 0.35)",
+            borderwidth=1,
+            font=dict(color=_DASH_TEXT),
+        ),
     )
-    fig.update_xaxes(gridcolor="rgba(255,255,255,0.08)", zeroline=False)
-    fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)", zeroline=False)
+    fig.update_xaxes(
+        gridcolor=_DASH_GRID,
+        zeroline=False,
+        linecolor="rgba(148, 163, 184, 0.35)",
+        tickfont=dict(color=_DASH_MUTED),
+        title_font=dict(color=_DASH_TEXT),
+    )
+    fig.update_yaxes(
+        gridcolor=_DASH_GRID,
+        zeroline=False,
+        linecolor="rgba(148, 163, 184, 0.35)",
+        tickfont=dict(color=_DASH_MUTED),
+        title_font=dict(color=_DASH_TEXT),
+    )
+    fig.update_annotations(font=dict(color=_DASH_TEXT))
+    tick = dict(tickformat=".0f", dtick=1, separatethousands=False)
+    if calendar_year_x:
+        fig.update_xaxes(**tick)
+    if calendar_year_y:
+        fig.update_yaxes(**tick)
     return fig
 
 
@@ -95,9 +126,18 @@ def _kpi_row(df: pd.DataFrame) -> None:
         st.metric(f"IAN ≥ {IAN_ADEQUACAO:g}", f"{pct_ok:.1f}%" if pct_ok == pct_ok else "—")
     with c5:
         if pct_alto == pct_alto:
-            st.metric(f"Risco alto (≥{int(RISKO_LIMIAR * 100)}%)", f"{pct_alto:.1f}%")
+            _lim = int(RISKO_LIMIAR * 100)
+            st.metric(
+                label="Alunos acima do corte (modelo)",
+                value=f"{pct_alto:.1f}%",
+                help=(
+                    f"**O que conta aqui:** **{pct_alto:.1f}%** dos alunos **deste filtro** têm probabilidade de alto risco **igual ou superior a {_lim}%** "
+                    f"(é esse o **corte** usado no painel). O **{_lim}%** não substitui o **{pct_alto:.1f}%** — um é o patamar, o outro é a **fatia** do grupo. "
+                    "No gráfico «Distribuição de risco», o corte aparece como linha tracejada."
+                ),
+            )
         else:
-            st.metric("Risco alto", "—")
+            st.metric("Risco ML (sem dados)", "—")
 
 
 def _chart_ian_por_ano(df: pd.DataFrame) -> go.Figure:
@@ -106,7 +146,7 @@ def _chart_ian_por_ano(df: pd.DataFrame) -> go.Figure:
     d = d.dropna(subset=["Ano"])
     fig = px.box(d, x="Ano", y="IAN", points="outliers", labels={"IAN": "IAN", "Ano": "Ano"})
     fig.update_traces(boxmean="sd")
-    return _pm_figure_layout(fig, "IAN por ano")
+    return _dash_figure_layout(fig, "IAN por ano", calendar_year_x=True)
 
 
 def _chart_base_por_ano(df: pd.DataFrame) -> go.Figure:
@@ -115,16 +155,16 @@ def _chart_base_por_ano(df: pd.DataFrame) -> go.Figure:
     else:
         c = df.groupby("Ano").size().reset_index(name="alunos")
     fig = px.bar(c, x="Ano", y="alunos", labels={"alunos": "Alunos", "Ano": "Ano"})
-    fig.update_traces(marker_color=_PM_ACCENT)
-    return _pm_figure_layout(fig, "Alunos por ano")
+    fig.update_traces(marker_color=_DASH_ACCENT, marker_line_width=0, opacity=0.9)
+    return _dash_figure_layout(fig, "Alunos por ano", calendar_year_x=True)
 
 
 def _chart_inde_pedra(df: pd.DataFrame) -> go.Figure:
     d = df.dropna(subset=["INDE", "Pedra"])
     g = d.groupby("Pedra", observed=True)["INDE"].mean().reset_index()
     fig = px.bar(g, x="Pedra", y="INDE", labels={"INDE": "INDE médio", "Pedra": "Pedra"})
-    fig.update_traces(marker_color=_PM_CYAN)
-    return _pm_figure_layout(fig, "INDE médio por Pedra")
+    fig.update_traces(marker_color=_DASH_ACCENT2, marker_line_width=0, opacity=0.9)
+    return _dash_figure_layout(fig, "INDE médio por Pedra")
 
 
 def _chart_correlacao(df: pd.DataFrame) -> go.Figure:
@@ -132,31 +172,33 @@ def _chart_correlacao(df: pd.DataFrame) -> go.Figure:
     if len(cols) < 2:
         fig = go.Figure()
         fig.add_annotation(text="Dados insuficientes", showarrow=False)
-        return _pm_figure_layout(fig, "Correlação entre indicadores", height=300)
+        return _dash_figure_layout(fig, "Correlação entre indicadores", height=300)
     num = df[cols].apply(pd.to_numeric, errors="coerce")
     corr = num.corr().fillna(0)
     fig = px.imshow(corr, text_auto=".2f", aspect="auto", color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
     fig.update_traces(hovertemplate="%{y} × %{x}<br>r = %{z:.2f}<extra></extra>")
-    return _pm_figure_layout(fig, "Correlação (Pearson)")
+    return _dash_figure_layout(fig, "Correlação (Pearson)")
 
 
 def _chart_risco_dist(df: pd.DataFrame) -> go.Figure:
     if "risco" not in df.columns or df["risco"].isna().all():
         fig = go.Figure()
         fig.add_annotation(text="Risco indisponível", showarrow=False)
-        return _pm_figure_layout(fig, "Distribuição de risco (modelo)")
+        return _dash_figure_layout(fig, "Distribuição de risco (modelo)")
     fig = px.histogram(df, x="risco", nbins=36, labels={"risco": "Probabilidade", "count": "N"})
     fig.update_layout(showlegend=False)
-    fig.update_traces(marker_color=_PM_ACCENT)
+    fig.update_traces(marker_color=_DASH_ACCENT, marker_line_color="rgba(255,255,255,0.15)", marker_line_width=0.5, opacity=0.88)
     fig.add_vline(
         x=RISKO_LIMIAR,
         line_dash="dash",
-        line_width=1,
-        line_color="#fff",
-        annotation_text=f" {int(RISKO_LIMIAR * 100)}%",
+        line_width=2,
+        line_color=_DASH_ACCENT2,
+        annotation_text=f" Limiar {int(RISKO_LIMIAR * 100)}%",
         annotation_position="top",
+        annotation_font_color=_DASH_TEXT,
+        annotation_bgcolor="rgba(18,18,24,0.85)",
     )
-    return _pm_figure_layout(fig, "Distribuição de risco")
+    return _dash_figure_layout(fig, "Distribuição de risco")
 
 
 def _indicator_label(code: str) -> str:
@@ -176,7 +218,7 @@ def _charts_for_indicator(df: pd.DataFrame, ind: str) -> None:
         fig1 = px.box(base, x="Ano", y="_y", labels={"_y": ind, "Ano": "Ano"})
         fig1.for_each_trace(lambda t: t.update(showlegend=False))
         fig1.update_traces(boxmean="sd")
-        _pm_figure_layout(fig1, f"{ind} por ano")
+        _dash_figure_layout(fig1, f"{ind} por ano", calendar_year_x=True)
         st.plotly_chart(fig1, width="stretch", key=f"dbx_{ind}_ano")
 
     with c2:
@@ -195,7 +237,7 @@ def _charts_for_indicator(df: pd.DataFrame, ind: str) -> None:
             fig2 = go.Figure()
             fig2.add_annotation(text="Sem dados para dispersão", showarrow=False)
             ttl = "Dispersão"
-        _pm_figure_layout(fig2, ttl)
+        _dash_figure_layout(fig2, ttl)
         st.plotly_chart(fig2, width="stretch", key=f"dbx_{ind}_scatter")
 
     c3, c4 = st.columns(2, gap="small")
@@ -210,12 +252,12 @@ def _charts_for_indicator(df: pd.DataFrame, ind: str) -> None:
                 .sort_values("Fase")
             )
             fig3 = px.bar(g, x="Fase", y="_y", labels={"_y": f"Média {ind}", "Fase": "Fase"})
-            fig3.update_traces(marker_color=_PM_CYAN)
-            _pm_figure_layout(fig3, f"{ind} — média por fase")
+            fig3.update_traces(marker_color=_DASH_ACCENT2, marker_line_width=0, opacity=0.9)
+            _dash_figure_layout(fig3, f"{ind} — média por fase")
         else:
             fig3 = go.Figure()
             fig3.add_annotation(text="Sem coluna Fase", showarrow=False)
-            _pm_figure_layout(fig3, f"{ind} por fase")
+            _dash_figure_layout(fig3, f"{ind} por fase")
         st.plotly_chart(fig3, width="stretch", key=f"dbx_{ind}_fase")
 
     with c4:
@@ -228,23 +270,40 @@ def _charts_for_indicator(df: pd.DataFrame, ind: str) -> None:
             .sort_values("Ano")
         )
         fig4 = px.line(ev, x="Ano", y="_y", markers=True, labels={"_y": f"Média {ind}", "Ano": "Ano"})
-        fig4.update_traces(line=dict(color=_PM_ACCENT, width=2), marker=dict(size=8))
-        _pm_figure_layout(fig4, f"Média de {ind} por ano")
+        fig4.update_traces(
+            line=dict(color=_DASH_ACCENT, width=2.5),
+            marker=dict(size=9, color=_DASH_ACCENT, line=dict(width=0)),
+        )
+        _dash_figure_layout(fig4, f"Média de {ind} por ano", calendar_year_x=True)
         st.plotly_chart(fig4, width="stretch", key=f"dbx_{ind}_evo")
 
 
 def render_dashboards(df: pd.DataFrame, bundle: dict[str, Any]) -> None:
     st.title("Dashboards")
-    st.caption("Resumo dos dados carregados (Parquet). Aba **Panorama**: visão geral. Aba **Indicador**: um indicador de cada vez.")
+    st.caption(
+        "Resumo dos dados carregados (Parquet). **Panorama** — visão geral; **Indicador** — um indicador de cada vez. "
+        "Gráficos com fundo escuro alinhado ao tema da página."
+    )
 
     with st.expander("O que significa cada indicador?", expanded=False):
         for code, title in INDICATOR_CATALOG:
             st.markdown(f"- **{code}** — {title}")
-        st.caption("«Risco» usa o modelo ML; o cartão % alto risco usa o limiar de 46% do treino.")
+        _rl = int(RISKO_LIMIAR * 100)
+        st.caption(
+            f"«**Risco**» = probabilidade de alto risco (modelo ML). O cartão **«Alunos acima do corte»** diz **que % do grupo** "
+            f"passa o patamar de **{_rl}%** de probabilidade — **não** é a média de risco nem «o risco ser {_rl}%»."
+        )
 
     cdf = _ensure_risco(df, bundle)
-    st.subheader("Visão geral")
-    _kpi_row(cdf)
+
+    with st.container(border=True):
+        st.subheader("Visão geral")
+        _kpi_row(cdf)
+        _rl = int(RISKO_LIMIAR * 100)
+        st.caption(
+            f"**Último cartão («Alunos acima do corte»):** **que % do grupo** o modelo classifica com probabilidade **≥ {_rl}%** "
+            f"(o **{_rl}%** é só o patamar; o **valor do cartão** é a **fatia de alunos**). Ajuda no cartão para mais pormenor."
+        )
 
     tab_pan, tab_ind = st.tabs(["Panorama", "Indicador"])
 
@@ -270,15 +329,21 @@ def render_dashboards(df: pd.DataFrame, bundle: dict[str, Any]) -> None:
         available = _numeric_indicators_in_df(cdf)
         if not available:
             st.warning("Nenhum indicador numérico encontrado.")
-            return
+        else:
+            labels = {c: f"{c} — {_indicator_label(c)}" for c in available}
+            default_ix = available.index("IDA") if "IDA" in available else 0
+            choice = st.selectbox(
+                "Indicador",
+                options=available,
+                index=min(default_ix, len(available) - 1),
+                format_func=lambda c: labels.get(c, c),
+                key="pm_dash_indicator_select",
+            )
+            _charts_for_indicator(cdf, choice)
 
-        labels = {c: f"{c} — {_indicator_label(c)}" for c in available}
-        default_ix = available.index("IDA") if "IDA" in available else 0
-        choice = st.selectbox(
-            "Indicador",
-            options=available,
-            index=min(default_ix, len(available) - 1),
-            format_func=lambda c: labels.get(c, c),
-            key="pm_dash_indicator_select",
+    with st.expander("Parecer do Theo sobre os dashboards (opcional)", expanded=False):
+        st.caption(
+            "Opcional: **não** afecta KPIs nem gráficos. Com **Ollama** em máquina local gera ou actualiza texto; "
+            "no **Streamlit Cloud** (MVP sem LLM) verá a mensagem de indisponibilidade ou texto em cache se existir."
         )
-        _charts_for_indicator(cdf, choice)
+        render_dashboard_theo_feedback(cdf, compact=True)

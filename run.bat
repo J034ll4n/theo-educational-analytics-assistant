@@ -20,16 +20,11 @@ pip install -r requirements.txt
 if not exist "data\dados.parquet" (
   echo Running ETL: relatorio.csv -^> dados.parquet
   python scripts\etl.py
-)
-
-if not exist "models\modelo.joblib" (
-  echo Training ML model...
-  python scripts\train_model.py
-)
-
-if exist "models\modelo.joblib" (
-  echo Refreshing data\dados.parquet with ML column risco...
-  python scripts\etl.py
+) else (
+  if exist "modelo_risco_aluno.pkl" (
+    echo Refreshing data\dados.parquet with ML column risco...
+    python scripts\etl.py
+  )
 )
 
 echo Starting Streamlit...

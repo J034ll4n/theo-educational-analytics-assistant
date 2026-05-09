@@ -58,5 +58,15 @@
     "coluna": "risco",
     "tipo": "float64",
     "descricao": "Probabilidade estimada pelo modelo de machine learning de alto risco escolar (defasagem ou evasão), variando de 0.0 a 1.0. O limiar operacional usado no painel segue o treino (ex.: risco >= 0.46 para alto risco)."
+  },
+  {
+    "coluna": "instituicao_de_ensino",
+    "tipo": "string",
+    "descricao": "Tipo de rede da instituição: valores típicos **Pública** ou **Privada** (contagens «público vs particular» devem usar esta coluna; trate **Privada** como «particular» na narrativa se o gestor disser «particular»)."
+  },
+  {
+    "coluna": "escola",
+    "tipo": "string",
+    "descricao": "Nome da unidade de ensino (colégio, EE, universidade, etc.). Para público vs particular **sem** `instituicao_de_ensino`, classifique heuristicamente: nomes que começam com **Ee ** / **EE** ou contêm **EMEF** / **Escola Estadual** tendem a ser rede pública; nomes próprios comerciais tendem a ser particular."
   }
 ]

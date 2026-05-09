@@ -83,6 +83,23 @@ def _column_groups(df: pd.DataFrame) -> tuple[list[str], list[str]]:
     return num_cols, cat_cols
 
 
+def _prioritize_ano_numeric_first(num_cols: list[str]) -> list[str]:
+    """Se existir coluna de ano letivo, usa-a como 1.ª numérica (eixo X em linhas com LAG + médias)."""
+    for key in ("Ano", "ano"):
+        if key in num_cols:
+            return [key] + [c for c in num_cols if c != key]
+    return num_cols
+
+
+def _apply_calendar_year_axis(fig: go.Figure, *, x_col: str | None = None, y_col: str | None = None) -> None:
+    """Anos 4 dígitos sem separador de milhares (evita 2.022 / 2,022.5 em locale pt)."""
+    tick = dict(tickformat=".0f", dtick=1, separatethousands=False)
+    if x_col is not None and str(x_col).strip().lower() == "ano":
+        fig.update_xaxes(**tick)
+    if y_col is not None and str(y_col).strip().lower() == "ano":
+        fig.update_yaxes(**tick)
+
+
 def _empty_fig(message: str) -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
@@ -119,6 +136,7 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
     if len(d.columns) == 0:
         return _empty_fig("Nenhuma coluna útil após limpar dados duplicados."), "vazio"
     num_cols, cat_cols = _column_groups(d)
+    num_cols = _prioritize_ano_numeric_first(num_cols)
 
     if chart_id == "auto":
         # Uma linha só com métricas numéricas (sem eixo categórico): gráfico não agrega
@@ -137,6 +155,7 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                 template="plotly_dark",
             )
             fig.update_layout(xaxis_title=cat_cols[0], yaxis_title=num_cols[0])
+            _apply_calendar_year_axis(fig, x_col=cat_cols[0])
             return fig, "barras"
         # Duas séries numéricas (ex.: x temporal e y métrica) — linha
         if len(num_cols) >= 2 and len(d) <= 500:
@@ -147,6 +166,7 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                 markers=True,
                 template="plotly_dark",
             )
+            _apply_calendar_year_axis(fig, x_col=num_cols[0])
             return fig, "linha"
         if len(num_cols) >= 1:
             fig = px.histogram(
@@ -155,6 +175,7 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                 template="plotly_dark",
                 nbins=min(40, max(10, len(d) // 3)),
             )
+            _apply_calendar_year_axis(fig, x_col=num_cols[0])
             return fig, "histograma"
         c0 = list(d.columns)[0]
         vc = d[c0].astype(str).value_counts().head(30)
@@ -176,6 +197,7 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                     markers=True,
                     template="plotly_dark",
                 )
+                _apply_calendar_year_axis(fig, x_col=num_cols[0])
             elif len(cat_cols) >= 1 and len(num_cols) >= 1:
                 fig = px.line(
                     d.sort_values(cat_cols[0]),
@@ -184,6 +206,7 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                     markers=True,
                     template="plotly_dark",
                 )
+                _apply_calendar_year_axis(fig, x_col=cat_cols[0])
             else:
                 return (
                     _empty_fig("Linhas precisam de pelo menos 2 colunas numéricas, ou 1 categoria + 1 número."),
@@ -200,9 +223,11 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                     template="plotly_dark",
                 )
                 fig.update_layout(xaxis_title=cat_cols[0], yaxis_title=num_cols[0])
+                _apply_calendar_year_axis(fig, x_col=cat_cols[0])
             elif len(num_cols) >= 1:
                 agg = d.groupby(num_cols[0], as_index=False).size()
                 fig = px.bar(agg, x=num_cols[0], y="size", template="plotly_dark")
+                _apply_calendar_year_axis(fig, x_col=num_cols[0])
             else:
                 c0 = list(d.columns)[0]
                 vc = d[c0].astype(str).value_counts().head(40)
@@ -218,6 +243,7 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                     orientation="h",
                     template="plotly_dark",
                 )
+                _apply_calendar_year_axis(fig, x_col=num_cols[0])
             elif len(num_cols) >= 1:
                 vc = d[num_cols[0]].value_counts().head(40)
                 fig = px.bar(x=vc.values, y=vc.index.astype(str), orientation="h", template="plotly_dark")
@@ -230,8 +256,10 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
         if chart_id == "scatter":
             if len(num_cols) >= 2:
                 fig = px.scatter(d, x=num_cols[0], y=num_cols[1], template="plotly_dark")
+                _apply_calendar_year_axis(fig, x_col=num_cols[0])
             elif len(cat_cols) >= 1 and len(num_cols) >= 1:
                 fig = px.scatter(d, x=cat_cols[0], y=num_cols[0], template="plotly_dark")
+                _apply_calendar_year_axis(fig, x_col=cat_cols[0])
             else:
                 return _empty_fig("Dispersão precisa de pelo menos duas colunas numéricas."), "erro"
             return fig, "scatter"
@@ -240,9 +268,11 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
             if len(num_cols) >= 2:
                 tmp = d.sort_values(num_cols[0])
                 fig = px.area(tmp, x=num_cols[0], y=num_cols[1], template="plotly_dark")
+                _apply_calendar_year_axis(fig, x_col=num_cols[0])
             elif len(cat_cols) >= 1 and len(num_cols) >= 1:
                 tmp = d.sort_values(cat_cols[0])
                 fig = px.area(tmp, x=cat_cols[0], y=num_cols[0], template="plotly_dark")
+                _apply_calendar_year_axis(fig, x_col=cat_cols[0])
             else:
                 return _empty_fig("Área precisa de eixo X e Y numéricos ou categoria + número."), "erro"
             return fig, "area"
@@ -255,9 +285,11 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                     template="plotly_dark",
                     nbins=min(50, max(10, len(d) // 3)),
                 )
+                _apply_calendar_year_axis(fig, x_col=num_cols[0])
             else:
                 c0 = list(d.columns)[0]
                 fig = px.histogram(d, x=c0, template="plotly_dark")
+                _apply_calendar_year_axis(fig, x_col=c0)
             return fig, "histograma"
 
         if chart_id == "pizza":
@@ -274,6 +306,7 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
         if chart_id == "box":
             if len(cat_cols) >= 1 and len(num_cols) >= 1:
                 fig = px.box(d, x=cat_cols[0], y=num_cols[0], template="plotly_dark")
+                _apply_calendar_year_axis(fig, x_col=cat_cols[0])
             elif len(num_cols) >= 1:
                 fig = px.box(d, y=num_cols[0], template="plotly_dark")
             else:

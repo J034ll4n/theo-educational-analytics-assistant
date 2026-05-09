@@ -129,6 +129,40 @@ def build_catalog_demo_df() -> pd.DataFrame:
     return df
 
 
+# Cobertura manual / smoke E2E: uma pergunta por «família» de dificuldade (20 no total).
+SMOKE_TWENTY_IDS: tuple[str, ...] = (
+    "b1",
+    "b4",
+    "b11",
+    "m2",
+    "m8",
+    "e2",
+    "e6",
+    "c3",
+    "r2",
+    "r6",
+    "i2",
+    "i6",
+    "x3",
+    "x10",
+    "k2",
+    "k6",
+    "s4",
+    "s5",
+    "e3",
+    "r1",
+)
+
+
+def get_smoke_twenty_question_cases() -> tuple[QuestionCase, ...]:
+    """Vinte perguntas do catálogo para testes manuais no chatbot ou `pytest -m ollama`."""
+    by_id = {c["id"]: c for c in QUESTION_CATALOG}
+    missing = [i for i in SMOKE_TWENTY_IDS if i not in by_id]
+    if missing:
+        raise ValueError(f"IDs em falta no catálogo: {missing}")
+    return tuple(by_id[i] for i in SMOKE_TWENTY_IDS)
+
+
 def theo_test_question_groups(max_per_categoria: int = 4) -> tuple[tuple[str, list[str]], ...]:
     """Agrupa perguntas por categoria para o expander do Streamlit."""
     grupos: dict[str, list[str]] = {}

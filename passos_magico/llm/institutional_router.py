@@ -6,9 +6,18 @@ import re
 
 # Perguntas que pedem narrativa do relatório/resumo (inclui menções a "pdf" por hábito do usuário)
 _NARRATIVE_PATTERNS = (
+    r"\bfeedback\b.*\b(relat[oó]rio\s+anual|gamma|resumo\s+anual|pede)\b",
+    r"\b(relat[oó]rio\s+anual|gamma|resumo\s+anual)\b.*\bfeedback\b",
+    r"\b(parecer|opini[aã]o|avalia[cç][aã]o|impress[aã]o|cr[ií]tica)\b.*\b(relat[oó]rio\s+anual|gamma|resumo\s+anual|pede)\b",
+    r"\bs[ií]ntese\s+institucional\b",
+    r"\b(narrativa|storytelling)\b.*\b(relat[oó]rio\s+anual|gamma|resumo\s+anual|pede)\b",
+    r"\b(o\s+que\s+diz|o\s+que\s+fala)\b.*\b(gamma|relat[oó]rio\s+anual|resumo\s+anual)\b",
+    r"\b(texto|conte[uú]do)\s+do\s+(gamma|relat[oó]rio\s+anual|resumo\s+anual)\b",
     r"\bresumo\s+anual\b",
     r"\b(no|do|da|em)\s+resumo\s+anual\b",
     r"\bpdf\b",
+    r"\bgamma\b",
+    r"\bno\s+site\b.*\b(relat[oó]rio|passos|datathon)\b",
     r"\brelat[oó]rio\b.*\bpede\b",
     r"\bpede\b.*\b20\d{2}\b",
     r"\bobjetivo[s]?\b.*\b(relat[oó]rio|pede|pdf|resumo)\b",
@@ -22,6 +31,7 @@ _NARRATIVE_PATTERNS = (
 # Se aparecerem, a pergunta provavelmente exige dados tabulares (não só texto institucional)
 _DATA_STRONG_PATTERNS = (
     r"\bm[eé]dia[s]?\b",
+    r"\b(m[eé]dia|total|soma)\b.*\b(relat[oó]rio\s+anual|gamma|resumo\s+anual|pede)\b",
     r"\bquantos\b",
     r"\bquantas\b",
     r"\bcontagem\b",
@@ -42,7 +52,8 @@ _DATA_STRONG_PATTERNS = (
 
 
 def has_annual_block_in_context(theo_context_block: str) -> bool:
-    return "### Resumo anual institucional" in (theo_context_block or "")
+    tb = theo_context_block or ""
+    return "### Resumo anual institucional" in tb or "### Contexto narrativo (Gamma / relatório anual)" in tb
 
 
 def is_institutional_narrative_only(question: str, theo_context_block: str) -> bool:

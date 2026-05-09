@@ -7,6 +7,7 @@ from typing import Any
 from passos_magico.llm.ficha_quality_hint import ficha_quality_snapshot_extra_lines
 from passos_magico.llm.ollama_client import invoke_string, ollama_available
 from passos_magico.llm.prompts import ML_DIAGNOSIS_SYSTEM
+from passos_magico.llm.shap_labels import shap_feature_label_pt
 
 
 def _ficha_snapshot_block(feats: dict[str, Any] | None) -> str:
@@ -41,14 +42,16 @@ def build_ml_context(
     lines = [
         f"Aluno: {nome} (RA {ra}).",
         f"Probabilidade estimada de risco de defasagem/evasão: {proba * 100:.1f}%.",
-        "Impacto aproximado por variável (SHAP ou importância):",
+        "Impacto aproximado por fator (SHAP): na tua resposta usa **sempre o nome legível** da coluna abaixo, "
+        "nunca só o identificador técnico entre parênteses.",
     ]
-    for name, val in shap_pairs[:8]:
-        lines.append(f"- {name}: {val:+.4f}")
+    for name, val in shap_pairs[:10]:
+        leg = shap_feature_label_pt(name)
+        lines.append(f"- **{leg}** (técnico: `{name}`): {val:+.4f}")
     lines.append("")
     lines.append(
-        "Lembrete do gráfico SHAP neste painel: barra à direita da origem (zero) = tende a **aumentar** o risco no "
-        "modelo; à esquerda = tende a **reduzir**."
+        "Leitura do gráfico SHAP: valor **positivo** → este fator, neste modelo, **empurra o risco para cima**; "
+        "valor **negativo** → **empurra para baixo**. Não confundir com «nota boa ou má» fora do modelo."
     )
     snap = _ficha_snapshot_block(feats)
     if snap:
@@ -68,13 +71,19 @@ def generate_diagnosis_text(
     if not ollama_available():
         return (
             f"**Theo:** {nome} apresenta cerca de **{proba * 100:.0f}%** de probabilidade de risco. "
-            "Principais fatores no modelo: "
-            + ", ".join(f"{n}" for n, _ in shap_pairs[:3])
+            "Fatores que mais pesam no modelo (leitura SHAP): "
+            + ", ".join(shap_feature_label_pt(n) for n, _ in shap_pairs[:3])
             + ". (Conecte o Ollama para um parecer mais detalhado.)"
         )
-    ctx = build_ml_context(nome, ra, proba, shap_pairs, feats=feats)
+    student = build_ml_context(nome, ra, proba, shap_pairs, feats=feats).strip()
+    head = (
+        "### Dados do caso individual (única fonte para percentagem de risco, SHAP e conclusões sobre ESTE aluno)\n\n"
+        + student
+    )
     if theo_context_block.strip():
-        ctx = f"{theo_context_block.strip()}\n\n---\n{ctx}"
+        ctx = head + "\n\n---\n\n" + theo_context_block.strip()
+    else:
+        ctx = head
     return invoke_string(
         ML_DIAGNOSIS_SYSTEM,
         ctx,

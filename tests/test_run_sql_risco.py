@@ -5,7 +5,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from passos_magico.data_engine.query import normalize_sql_comparison_operators, run_sql, validate_select_only
+from passos_magico.data_engine.query import (
+    normalize_sql_comparison_operators,
+    prettify_sql_result_columns,
+    run_sql,
+    validate_select_only,
+)
 from passos_magico.ml.inference import ensure_risco_column
 
 
@@ -84,3 +89,86 @@ def test_run_sql_count_high_risk_with_injected_risco(monkeypatch) -> None:
     assert ok, err
     result = run_sql(sql, df=df_enriched, bundle=None)
     assert int(result.iloc[0]["n"]) == 2
+
+
+def test_run_sql_renames_bare_count_star_column(monkeypatch) -> None:
+    """COUNT(*) sem AS vira coluna count_star() no DuckDB — normalizamos para `total` (ou similar)."""
+    df = pd.DataFrame({"RA": ["a", "b"], "x": [1, 2]})
+    monkeypatch.setattr(
+        "passos_magico.ml.inference.ensure_risco_column",
+        lambda d, _b: d,
+    )
+    out = run_sql("SELECT COUNT(*) FROM dados", df=df, bundle=None)
+    joined = "_".join(map(str, out.columns))
+    assert "count_star" not in joined.lower()
+    assert int(out.iloc[0, 0]) == 2
+
+
+def test_prettify_only_count_star() -> None:
+    raw = pd.DataFrame({"count_star()": [42]})
+    out = prettify_sql_result_columns(raw.copy())
+    assert "count_star" not in "".join(out.columns).lower()
+    assert int(out.iloc[0, 0]) == 42
+
+
+def test_run_sql_public_private_counts_by_instituicao(monkeypatch) -> None:
+    """Pública/Privada em instituicao_de_ensino → agregação com rótulo Particular."""
+    df = pd.DataFrame(
+        {
+            "instituicao_de_ensino": ["Pública", "Pública", "Privada", "Privada", "Privada"],
+            "RA": [f"R{i}" for i in range(5)],
+        }
+    )
+    monkeypatch.setattr(
+        "passos_magico.ml.inference.ensure_risco_column",
+        lambda d, _b: d,
+    )
+    sql = """
+SELECT CASE TRIM(COALESCE(instituicao_de_ensino, ''))
+         WHEN 'Privada' THEN 'Particular'
+         WHEN 'Pública' THEN 'Pública'
+         ELSE 'Não informado'
+       END AS tipo_rede,
+       COUNT(*) AS quantidade
+FROM dados
+GROUP BY 1
+ORDER BY tipo_rede
+"""
+    out = run_sql(sql, df=df, bundle=None)
+    by_tipo = dict(zip(out["tipo_rede"], out["quantidade"]))
+    assert int(by_tipo["Pública"]) == 2
+    assert int(by_tipo["Particular"]) == 3
+
+
+def test_run_sql_public_private_heuristic_on_escola(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "passos_magico.ml.inference.ensure_risco_column",
+        lambda d, _b: d,
+    )
+    df = pd.DataFrame(
+        {
+            "escola": [
+                "Ee Paschoal Carlos Magno",
+                "Colégio Poliedro - Sp",
+                "Desconhecido",
+            ],
+            "RA": ["a", "b", "c"],
+        }
+    )
+    sql = r"""
+SELECT CASE
+         WHEN regexp_matches(lower(COALESCE(escola, '')), '^(ee\s|e\.e\.|emef|emeief|escola estadual)')
+           THEN 'Pública'
+         WHEN trim(lower(COALESCE(escola, ''))) IN ('desconhecido', '', 'nan') THEN 'Não informado'
+         ELSE 'Particular'
+       END AS tipo_rede,
+       COUNT(*) AS quantidade
+FROM dados
+GROUP BY 1
+ORDER BY tipo_rede
+"""
+    out = run_sql(sql, df=df, bundle=None)
+    by_tipo = dict(zip(out["tipo_rede"], out["quantidade"]))
+    assert int(by_tipo["Pública"]) == 1
+    assert int(by_tipo["Particular"]) == 1
+    assert int(by_tipo["Não informado"]) == 1

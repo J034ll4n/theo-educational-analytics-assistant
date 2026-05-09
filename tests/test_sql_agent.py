@@ -14,6 +14,10 @@ from passos_magico.llm.charts import figure_from_dataframe
 from passos_magico.llm.insight_mode import infer_insight_response_mode
 from passos_magico.llm.kpi_narration import kpi_narration_block
 from passos_magico.llm.prompts import build_insight_user
+from passos_magico.semantic.metadata import (
+    GAMMA_CONTEXT_SECTION_PREFIX,
+    context_without_gamma_narrative,
+)
 from passos_magico.llm.sql_parse import extract_sql_block, sql_passes_quick_validation
 
 
@@ -192,6 +196,43 @@ class TestBuildInsightUserMode(unittest.TestCase):
         )
         self.assertIn("MODO_RESPOSTA: analitico", u2)
 
+    def test_kpi_omits_long_institutional_context(self):
+        """Evita que o relatório/Gamma entre no prompt de insight para totais de uma linha."""
+        bloated = "### Resumo anual\n" + ("Lorem ipsum. " * 200)
+        u = build_insight_user(
+            "Quantos registos?",
+            "total\n42",
+            "kpi",
+            bloated,
+            None,
+            insight_mode="kpi",
+        )
+        self.assertNotIn("Lorem ipsum", u)
+        self.assertIn("ignore narrativas", u)
+
+    def test_analitico_strips_gamma_section_from_context(self):
+        toxic = "AUC 0.91 clusters modelo preditivo"
+        merged = "### Dicionário\n- col: desc\n" + GAMMA_CONTEXT_SECTION_PREFIX + toxic
+        u = build_insight_user(
+            "Média por turma",
+            "Turma  media\nA  5.1",
+            "barras",
+            merged,
+            None,
+            insight_mode="analitico",
+        )
+        self.assertNotIn("AUC 0.91", u)
+        self.assertIn("Dicionário", u)
+        self.assertIn("Gamma omitida", u)
+
+
+class TestContextWithoutGamma(unittest.TestCase):
+    def test_strip_leaves_dictionary(self):
+        s = "DICT\n" + GAMMA_CONTEXT_SECTION_PREFIX + "LONG GAMMA"
+        out = context_without_gamma_narrative(s)
+        self.assertIn("DICT", out)
+        self.assertNotIn("LONG GAMMA", out)
+
 
 class TestKpiNarrationBlock(unittest.TestCase):
     def test_none_when_too_many_rows(self):
@@ -203,13 +244,60 @@ class TestKpiNarrationBlock(unittest.TestCase):
         s = kpi_narration_block(df)
         self.assertIsNotNone(s)
         self.assertIn("media_ida", s)
-        self.assertIn("6.50", s.replace(",", "."))
+        self.assertRegex(s.replace(",", "."), r"6\.5")
+
+    def test_single_row_count_integer_format(self):
+        df = pd.DataFrame({"total": [234]})
+        s = kpi_narration_block(df)
+        self.assertIsNotNone(s)
+        self.assertIn("234", s)
+        self.assertNotIn("234.00", s)
 
     def test_grouped_means(self):
         df = pd.DataFrame({"Fase": [6, 7], "media_inde": [7.0, 7.5]})
         s = kpi_narration_block(df)
         self.assertIsNotNone(s)
         self.assertIn("média", s.lower())
+
+    def test_degenerate_inde_all_zero_adds_alert(self):
+        df = pd.DataFrame({"Turma": ["A", "B", "C"], "media_inde": [0.0, 0.0, 0.0]})
+        s = kpi_narration_block(df)
+        self.assertIsNotNone(s)
+        self.assertIn("lacuna", (s or "").lower())
+
+    def test_student_profile_skips_technical_means(self):
+        """Um RA: não deve sugerir médias sobre cg/cf; booleanos como Sim/Não."""
+        df = pd.DataFrame(
+            {
+                "RA": ["RA-910"] * 3,
+                "Nome": ["Aluno-910"] * 3,
+                "Ano": [2022, 2023, 2024],
+                "INDE": [6.5, 7.0, 7.8],
+                "cg": [280.0, 290.0, 295.0],
+                "indicado_bolsa": [1, 1, 1],
+            }
+        )
+        s = kpi_narration_block(df)
+        self.assertIsNotNone(s)
+        self.assertIn("RA-910", s or "")
+        self.assertIn("Perfil (um aluno)", s or "")
+        self.assertNotIn("280", s or "")
+        self.assertNotIn("290", s or "")
+        self.assertIn("indicado_bolsa", (s or "").lower())
+        self.assertIn("Sim", s or "")
+
+    def test_student_profile_shows_generic_name_hint(self):
+        df = pd.DataFrame(
+            {
+                "RA": ["RA-910"],
+                "Nome": ["Aluno-910"],
+                "Ano": [2024],
+                "INDE": [7.5],
+            }
+        )
+        s = kpi_narration_block(df)
+        self.assertIsNotNone(s)
+        self.assertIn("genérico", (s or "").lower())
 
 
 if __name__ == "__main__":

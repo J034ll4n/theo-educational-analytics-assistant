@@ -27,7 +27,8 @@ def suggest_minimal_ieg_ida(
 ) -> IegIdaPlanResult:
     """
     Procura o par (IEG, IDA) com menor «custo» (distância quadrática ao cenário atual)
-    tal que P(risco) < threshold, incrementando a partir dos valores atuais até max_value.
+    tal que P(risco) <= threshold (igual ao limiar verde da UI), incrementando a partir
+    dos valores atuais até max_value.
 
     `predict_fn` recebe uma cópia mutável do cenário com IEG/IDA atualizados.
     """
@@ -35,7 +36,7 @@ def suggest_minimal_ieg_ida(
     p0 = float(predict_fn(sim))
     if p0 != p0:  # NaN
         return IegIdaPlanResult(status="impossible")
-    if p0 < float(threshold):
+    if p0 <= float(threshold):
         return IegIdaPlanResult(status="already_below")
 
     start_ieg = float(sim["IEG"])
@@ -48,7 +49,7 @@ def suggest_minimal_ieg_ida(
             sim["IEG"] = float(round(float(ieg_v), 2))
             sim["IDA"] = float(round(float(ida_v), 2))
             p = float(predict_fn(sim))
-            if p != p or not (p < float(threshold)):
+            if p != p or not (p <= float(threshold)):
                 continue
             cost = (sim["IEG"] - start_ieg) ** 2 + (sim["IDA"] - start_ida) ** 2
             candidate = (sim["IEG"], sim["IDA"])

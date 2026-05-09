@@ -2,6 +2,7 @@ from passos_magico.ml.inference import (
     explain_row_shap,
     load_model_bundle,
     predict_risk_batch,
+    predict_risk_slice,
     predict_row_after_simulation,
     predict_row_features,
 )
@@ -11,6 +12,7 @@ __all__ = [
     "explain_row_shap",
     "load_model_bundle",
     "predict_risk_batch",
+    "predict_risk_slice",
     "predict_row_after_simulation",
     "predict_row_features",
     "row_features_from_df",

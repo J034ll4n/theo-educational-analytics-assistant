@@ -14,6 +14,16 @@ def test_already_below_threshold() -> None:
     assert r.ieg is None and r.ida is None
 
 
+def test_already_below_includes_exact_threshold() -> None:
+    """Alinhado à UI: 46% conta como faixa verde (não só estritamente abaixo)."""
+
+    def pred(_sim: dict) -> float:
+        return 0.46
+
+    r = suggest_minimal_ieg_ida({"IEG": 7.0, "IDA": 7.0}, pred, threshold=0.46)
+    assert r.status == "already_below"
+
+
 def test_impossible_nan_initial() -> None:
     def pred(_sim: dict) -> float:
         return float("nan")

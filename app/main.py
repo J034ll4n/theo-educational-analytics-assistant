@@ -12,11 +12,14 @@ warnings.filterwarnings(
 )
 
 import base64
+import hashlib
+import html
 import io
 import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Garante imports `app` e `passos_magico` quando o CWD não é a raiz do projeto
 _ROOT = Path(__file__).resolve().parents[1]
@@ -45,11 +48,13 @@ from plotly.io import to_image
 
 from app.cached import cached_load_dados, cached_model_bundle, make_chat_sql_runner
 from passos_magico.data_engine.loader import DATA_DIR, get_parquet_path
+from passos_magico.llm.error_messages import humanize_sql_execution_error
 from passos_magico.llm.ml_text import generate_diagnosis_text
 from passos_magico.llm.ollama_client import ollama_available
 from passos_magico.llm.institutional_router import is_institutional_narrative_only
 from passos_magico.llm.pipeline import (
     invoke_institutional_insight,
+    invoke_insight_text,
     sql_and_chart_step,
     stream_institutional_insight_text,
     stream_insight_text,
@@ -58,17 +63,22 @@ from passos_magico.llm.pipeline import (
 from passos_magico.ml.features import (
     FEATURE_ORDER,
     latest_row_per_ra_table,
+    one_row_per_ra_for_year,
     pick_latest_year_row,
+    reference_years_available,
     row_features_from_df,
+    rows_for_reference_year,
+    years_for_ra,
 )
 from passos_magico.ml.inference import (
     explain_row_shap,
-    predict_risk_batch,
+    predict_risk_slice,
     predict_row_after_simulation,
     predict_row_features,
 )
 from passos_magico.ml.risk_display import OPERATIONAL_HIGH_RISK_THRESHOLD
 from passos_magico.llm.charts import CHART_TYPE_OPTIONS, figure_from_dataframe, heuristic_kind_to_chart_id
+from passos_magico.semantic.dictionary_merge import merge_dictionary_with_dataframe
 from passos_magico.semantic.metadata import (
     load_annual_summary_text,
     load_dictionary,
@@ -78,12 +88,11 @@ from passos_magico.semantic.metadata import (
     save_dictionary,
 )
 from passos_magico.ui.dashboard import render_dashboards
-from passos_magico.ui.risk_plan_suggest import suggest_minimal_ieg_ida
 from passos_magico.ui.risk_sim_copy import risk_explain_lines, sim_matches_base_ficha, snapshot_sim_baseline
 from passos_magico.ui.ranking_filters import (
     ranking_fase_options,
     ranking_mask,
-    ranking_turma_letter_options,
+    ranking_turma_letter_options_for_fase,
 )
 from passos_magico.ui.styles import inject_global_css
 from tests.fixtures.theo_question_catalog import theo_test_question_groups
@@ -99,14 +108,13 @@ PAGE_DEFS: list[tuple[str, str, str]] = [
     (
         "annual_report",
         "📄  Relatório anual",
-        "O PDF abre nesta página com o leitor do Streamlit. Ficheiro: assets/relatorio_anual.pdf. "
-        "Requer o pacote **streamlit-pdf** (`pip install streamlit-pdf`). Opcional: URL Gamma.",
+        "Relatório institucional (Gamma) embebido nesta página.",
     ),
     (
         "risk",
         "🎯  Previsão de risco",
-        "Um aluno de cada vez: risco na ficha, contexto pedagógico, SHAP e parecer do Theo; simulação manual só no modo técnico (opcional). "
-        "Segunda aba: lista ordenada por risco com filtros de fase (1–8) e turma (A–E), sem duplicados por grafia.",
+        "Ficha individual com SHAP e parecer do Theo; **matriz de priorização** com filtros por fase (1–8) e turma (A–E), "
+        "indicadores de recorte e exportação CSV. Simulação só no modo técnico (opcional).",
     ),
     (
         "dashboard",
@@ -117,26 +125,28 @@ PAGE_DEFS: list[tuple[str, str, str]] = [
         "dict",
         "📖  Dicionário de dados",
         "Edite descrições das colunas: o Theo usa esse texto como contexto ao gerar SQL e respostas. "
-        "Salve para aplicar na próxima pergunta do chat. Na mesma página pode pré-visualizar o Parquet em uso ou o CSV em data/relatorio.csv.",
+        "Salve para aplicar na próxima pergunta do chat. Na mesma página pode pré-visualizar o **Parquet** em uso (e opcionalmente o CSV de entrada ao ETL).",
     ),
 ]
 PAGE_LABELS: dict[str, str] = {p[0]: p[1] for p in PAGE_DEFS}
 PAGE_HELP: dict[str, str] = {p[0]: p[2] for p in PAGE_DEFS}
 _MAX_CHART_ROWS = 5000
 
-_ANNUAL_PDF_PATH = _ROOT / "assets" / "relatorio_anual.pdf"
+_DEFAULT_ANNUAL_REPORT_URL = "https://datathon-passos-magicos-sojo7d1.gamma.site/"
 
 
 def _annual_gamma_url() -> str:
-    """URL público da apresentação Gamma (opcional). Ambiente tem prioridade sobre secrets."""
+    """URL público da apresentação no Gamma. Ambiente → secrets → URL por defeito."""
     env = os.environ.get("PM_RELATORIO_ANUAL_GAMMA_URL", "").strip()
     if env:
         return env
     try:
         v = st.secrets["RELATORIO_ANUAL_GAMMA_URL"]
+        if v and str(v).strip():
+            return str(v).strip()
     except Exception:
-        return ""
-    return str(v).strip() if v else ""
+        pass
+    return _DEFAULT_ANNUAL_REPORT_URL
 
 
 def _annual_plain_for_theo() -> str:
@@ -169,6 +179,19 @@ def _chart_type_labels() -> dict[str, str]:
     return {cid: label for cid, label in CHART_TYPE_OPTIONS}
 
 
+def _scalar_result_no_chart(df: pd.DataFrame | None, heuristic_kind: str | None) -> bool:
+    """Uma linha agregada sem eixo categórico — o Theo não desenha série útil (modo kpi nos gráficos)."""
+    hk = (heuristic_kind or "").strip().lower()
+    if hk == "kpi":
+        return True
+    # Mensagens antigas sem `chart_kind`: mesmo critério heurístico de `charts.py` (1 linha, só números).
+    if not hk and df is not None and not df.empty and len(df) == 1:
+        nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        cats = [c for c in df.columns if c not in nums]
+        return len(nums) >= 1 and len(cats) == 0
+    return False
+
+
 def _render_chart_with_type_switch(
     *,
     df: pd.DataFrame | None,
@@ -182,6 +205,12 @@ def _render_chart_with_type_switch(
     labels = _chart_type_labels()
     ids = [cid for cid, _ in CHART_TYPE_OPTIONS]
     df_ok = df is not None and not df.empty
+    if df_ok and _scalar_result_no_chart(df, default_heuristic_kind):
+        st.caption(
+            "Resultado **agregado** (um número ou poucos valores) — **sem gráfico**. "
+            "A interpretação está na **Resposta** abaixo; abra **SQL gerado** para ver a consulta exata."
+        )
+        return
     if df_ok:
         default_id = heuristic_kind_to_chart_id(default_heuristic_kind or "auto")
         if default_id not in ids:
@@ -326,6 +355,23 @@ def _shap_risk_figure(shap_pairs: list[tuple[str, float]]) -> go.Figure:
     return fig
 
 
+def _suggestions_cache_key(user_q: str, insight: str) -> str:
+    payload = f"{user_q[:400]}\n{insight[:900]}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:28]
+
+
+def _cached_suggestions(user_text: str, insight_full: str) -> list[str]:
+    cache: dict[str, list[str]] = st.session_state.setdefault("pm_theo_suggestions_cache", {})
+    key = _suggestions_cache_key(user_text, insight_full)
+    if key in cache:
+        return cache[key]
+    out = suggestions_step(user_text, insight_full)
+    cache[key] = out
+    while len(cache) > 64:
+        cache.pop(next(iter(cache)))
+    return out
+
+
 def _render_one_chat_message(msg: dict, msg_index: int) -> None:
     av = "🎓" if msg["role"] == "assistant" else "👤"
     with st.chat_message(msg["role"], avatar=av):
@@ -344,6 +390,10 @@ def _render_one_chat_message(msg: dict, msg_index: int) -> None:
                     download_key=f"dl_{msg_index}_{msg.get('id', 0)}",
                 )
             st.markdown(msg.get("content", ""))
+            raw_err = msg.get("sql_error_raw")
+            if raw_err:
+                with st.expander("Detalhe técnico (DuckDB / validação)"):
+                    st.code(str(raw_err), language="text")
             if msg.get("suggestions"):
                 cols = st.columns(3)
                 for i, s in enumerate(msg["suggestions"][:3]):
@@ -374,7 +424,8 @@ def render_chat(
         )
         st.markdown(f"[Abrir repositório no GitHub — download e instruções]({_GITHUB_CHATBOT_REPO})")
     st.caption(
-        "O Theo gera SQL, mostra um gráfico e explica. Pode mudar o tipo de gráfico abaixo da figura sem repetir a pergunta."
+        "O Theo gera SQL, **gráfico quando faz sentido** (totais de uma linha: só texto, sem gráfico nem tabela duplicada) e explica. "
+        "Quando há figura, pode mudar o tipo de gráfico sem repetir a pergunta."
     )
     with st.expander("Exemplos de perguntas para testar o Theo", expanded=False):
         for title, items in THEO_TEST_QUESTIONS:
@@ -413,14 +464,20 @@ def render_chat(
                 sql_context_df=sql_context_df,
             )
         except Exception as e:
-            err_msg = f"**Theo:** Ocorreu um erro inesperado: `{e!s}`"
+            err_msg = (
+                "**Theo:** Algo falhou por aqui do lado da aplicação — não foi o seu raciocínio. "
+                "Tente outra vez; se insistir, copie o detalhe técnico para o apoio."
+            )
             st.markdown(err_msg)
+            with st.expander("Detalhe técnico"):
+                st.code(str(e), language="text")
             st.session_state.messages.append(
                 {
                     "role": "assistant",
                     "id": msg_id,
                     "content": err_msg,
                     "sql": None,
+                    "sql_error_raw": str(e),
                     "figure_json": None,
                     "suggestions": [
                         "Tentar uma pergunta mais simples",
@@ -449,13 +506,13 @@ def _run_assistant_turn(
             insight_full = ""
         if len(insight_full.strip()) < 40:
             insight_full = invoke_institutional_insight(user_text, theo_context_block)
-        sugs = suggestions_step(user_text, insight_full)
+        sugs = _cached_suggestions(user_text, insight_full)
         st.session_state.messages.append(
             {
                 "role": "assistant",
                 "id": msg_id,
                 "content": insight_full,
-                "sql": "-- Pergunta respondida com o texto do resumo anual (sem consulta à tabela `dados`).",
+                "sql": "-- Pergunta respondida com o texto institucional (sem consulta à base tabular).",
                 "figure_json": None,
                 "chart_df_json": None,
                 "chart_kind": "institucional",
@@ -476,17 +533,25 @@ def _run_assistant_turn(
         err = step.sql_error or "Erro desconhecido."
         if ollama_ok and getattr(step, "recovery_markdown", None):
             text = f"**Theo:**\n\n{step.recovery_markdown}"
+            raw_for_msg: str | None = None
         elif ollama_ok:
-            text = f"**Theo:** Não consegui concluir a análise. Detalhes: {err}"
+            friendly = humanize_sql_execution_error(str(err))
+            text = f"**Theo:** {friendly}"
+            raw_for_msg = str(err)
         else:
-            text = "**Theo:** Ollama indisponível. Inicie o serviço local e tente novamente."
+            text = "**Theo:** O **Ollama** não está disponível neste ambiente. Inicie o serviço local e tente de novo."
+            raw_for_msg = None
         st.markdown(text)
+        if raw_for_msg:
+            with st.expander("Detalhe técnico (DuckDB / validação)"):
+                st.code(raw_for_msg, language="text")
         st.session_state.messages.append(
             {
                 "role": "assistant",
                 "id": msg_id,
                 "content": text,
                 "sql": step.sql,
+                "sql_error_raw": raw_for_msg,
                 "figure_json": None,
                 "suggestions": [
                     "Média de IDA por Fase em 2022",
@@ -516,7 +581,11 @@ def _run_assistant_turn(
         )
     if insight_full is None:
         insight_full = ""
-    sugs = suggestions_step(user_text, insight_full)
+    if len(insight_full.strip()) < 40:
+        insight_full = invoke_insight_text(
+            user_text, theo_context_block, step.df, step.chart_kind
+        )
+    sugs = _cached_suggestions(user_text, insight_full)
     st.session_state.messages.append(
         {
             "role": "assistant",
@@ -584,14 +653,46 @@ def _media_turma_base_optional(row: pd.Series | None) -> float | None:
         return None
 
 
-def _risk_plan_session_key(ra: str, sim: dict[str, Any]) -> str:
-    """Chave estável para guardar sugestão de plano enquanto o cenário não muda."""
-    payload = {k: round(float(sim[k]), 3) for k in sorted(sim.keys())}
-    return f"{ra}|{json.dumps(payload, sort_keys=True, ensure_ascii=False)}"
+def _sim_ficha_controle_resumo_html(
+    baseline: dict[str, float],
+    key: str,
+    current: float,
+    *,
+    tol: float = 0.051,
+    nd: int = 1,
+) -> str:
+    """Resumo legível: valor na ficha, valor no controle e mudança % (verde = acima da ficha, vermelho = abaixo)."""
+    bv = float(baseline.get(key, current))
+    cv = float(current)
+    d = cv - bv
+    if abs(d) <= tol:
+        mud = '<span style="color:#6e7681;font-weight:600;">sem mudança vs ficha</span>'
+    else:
+        den = max(abs(bv), 0.45)
+        if key == "Delta_INDE":
+            den = max(abs(bv), 0.35) if abs(bv) > 1e-6 else 1.0
+        pct = (d / den) * 100.0
+        pct = float(max(-500.0, min(500.0, pct)))
+        if pct > 0.5:
+            col, lab = "#3fb950", f"+{pct:.0f}% vs ficha (subiu no controle)"
+        elif pct < -0.5:
+            col, lab = "#f85149", f"{pct:.0f}% vs ficha (desceu no controle)"
+        else:
+            col, lab = "#8b949e", f"{pct:+.0f}% vs ficha"
+        mud = f'<span style="color:{col};font-weight:700;">{lab}</span>'
+    return (
+        f'<p style="margin:0.2rem 0 0.65rem 0;font-size:0.88rem;line-height:1.4;">'
+        f'<span style="color:#8b949e">Na ficha:</span> <strong>{bv:.{nd}f}</strong>'
+        f' &nbsp;·&nbsp; <span style="color:#8b949e">No controle:</span> <strong>{cv:.{nd}f}</strong>'
+        f" &nbsp;·&nbsp; {mud}</p>"
+    )
 
 
-def _get_engineered_row_for_display(df: pd.DataFrame, ra: str) -> pd.Series | None:
-    """Mesma linha que `row_features_from_df`, com colunas de engenharia do modelo de risco."""
+def _get_engineered_row_for_display(
+    df: pd.DataFrame, ra: str, ref_year: int | None = None
+) -> pd.Series | None:
+    """Linha alinhada a `row_features_from_df` (último ano ou `ref_year`), com engenharia do modelo de risco."""
+    from passos_magico.ml.features import single_row_for_ra_and_year
     from passos_magico.ml.risk_pipeline import ensure_risk_engineering
 
     ra_col = "RA" if "RA" in df.columns else "ra"
@@ -600,7 +701,13 @@ def _get_engineered_row_for_display(df: pd.DataFrame, ra: str) -> pd.Series | No
     sub = df[df[ra_col].astype(str) == str(ra)]
     if sub.empty:
         return None
-    key = pick_latest_year_row(sub).iloc[0]
+    if ref_year is None:
+        key = pick_latest_year_row(sub).iloc[0]
+    else:
+        one = single_row_for_ra_and_year(df, ra, int(ref_year))
+        if one.empty:
+            return None
+        key = one.iloc[0]
     y_val: float | None = None
     for ac in ("ano_referencia", "Ano"):
         if ac in key.index and pd.notna(key[ac]):
@@ -745,8 +852,8 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
     st.subheader("Previsão de risco escolar")
     st.markdown(
         "Probabilidade de **alto risco** (defasagem / evasão) a partir do relatório. "
-        "Não substitui a equipe. **Aba 1:** um aluno (ficha, contexto, SHAP, Theo). **Aba 2:** ranking. "
-        "**Simulação** só no modo técnico."
+        "Não substitui a equipa pedagógica. **Aba 1:** ficha individual (contexto, SHAP, Theo). **Aba 2:** matriz de priorização "
+        "com filtros e exportação. **Simulação** só no modo técnico."
     )
     with st.expander("Ajuda rápida (SHAP, 46%, simulação)", expanded=False):
         st.markdown(
@@ -756,13 +863,13 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
             "- **Modo técnico:** cenário «e se…»; a base **não** é alterada."
         )
 
-    tab1, tab2 = st.tabs(["Análise individual", "Ranking (triagem)"])
+    tab1, tab2 = st.tabs(["Análise individual", "Matriz de priorização"])
 
     with tab1:
         st.markdown(
             _risk_heading_html(
                 "1 · Quem analisar",
-                "Indique o RA ou escolha o nome na lista.",
+                "Uma só lista: **escreve** para filtrar e escolhe o aluno; se houver vários anos, escolhe o **ano da ficha** abaixo (por defeito 2024 se existir).",
                 tight_top=True,
             ),
             unsafe_allow_html=True,
@@ -770,25 +877,49 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
         _picker_df = latest_row_per_ra_table(df)
         _nome_col = "Nome" if "Nome" in _picker_df.columns else "nome"
         _ra_col_p = "RA" if "RA" in _picker_df.columns else "ra"
-        names = _picker_df[_nome_col].astype(str) + " — " + _picker_df[_ra_col_p].astype(str)
+        _n_alunos = len(_picker_df)
+        _label_series = _picker_df[_nome_col].astype(str) + " — " + _picker_df[_ra_col_p].astype(str)
         ra_from_select = None
-        c1, c2 = st.columns(2)
-        with c1:
-            ra_input = st.text_input(
-                "Registro do aluno (RA)",
-                placeholder="RA2020001",
-                help="Igual ao que aparece na base. Pode copiar e colar.",
+        if _n_alunos == 0:
+            st.warning("Não há alunos na base carregada.")
+            pick_display = None
+        else:
+            st.caption(
+                f"**{_n_alunos:,}** aluno(s) na lista (um nome por aluno — **último ano** na base para o filtro). O campo abaixo filtra **enquanto digitas**."
+                .replace(",", ".")
             )
-        with c2:
-            pick = st.selectbox(
-                "Ou escolha pelo nome na lista",
-                options=[""] + list(names),
-                help="Lista com um registro por aluno (último ano de referência na base).",
+            pick_display = st.selectbox(
+                "Escolher aluno na lista",
+                options=list(_label_series),
+                index=None,
+                placeholder="Digite nome, parte do RA ou cole o RA completo…",
+                filter_mode="contains",
+                help="Abre a lista, escreve para afinar resultados e clica no aluno. O filtro é na própria caixa (Streamlit).",
+                key="pm_rsk_student_pick",
+                width="stretch",
             )
-        if pick:
-            ra_from_select = str(_picker_df.loc[names == pick, _ra_col_p].iloc[0])
-        ra = (ra_from_select or ra_input or "").strip()
-        feats = row_features_from_df(df, ra) if ra else None
+        if pick_display:
+            ra_from_select = str(_picker_df.loc[_label_series == pick_display, _ra_col_p].iloc[0])
+        ra = (ra_from_select or "").strip()
+        feats = None
+        if ra:
+            _years_ra = years_for_ra(df, ra)
+            if not _years_ra:
+                st.warning("Este RA não tem **Ano** / **ano_referencia** na base — não dá para montar a ficha por ano.")
+            elif len(_years_ra) == 1:
+                feats = row_features_from_df(df, ra, int(_years_ra[0]))
+            else:
+                _def_ficha_y = 2024 if 2024 in _years_ra else int(_years_ra[0])
+                _y_idx = _years_ra.index(_def_ficha_y)
+                _sel_ficha_y = st.selectbox(
+                    "Ano da ficha",
+                    options=_years_ra,
+                    index=_y_idx,
+                    format_func=lambda y: str(int(y)),
+                    key=f"pm_rsk_ficha_year_{ra}",
+                    help="Risco, SHAP e Theo usam os dados **deste** ano. Por defeito: **2024** se existir, senão o mais recente.",
+                )
+                feats = row_features_from_df(df, ra, int(_sel_ficha_y))
 
         if feats:
             base_feats = {k: feats[k] for k in FEATURE_ORDER}
@@ -812,6 +943,10 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
                 "Turma",
                 f"{_turma_ord_to_letter(feats['Turma_ord'])}",
                 help=f"Na base: {int(feats['Turma_ord'])} (1=A … 5=E).",
+            )
+            st.caption(
+                f"Risco e SHAP usam o registo de **{int(feats['Ano'])}**. Na matriz, escolhe o **mesmo ano** em «Ano de referência na lista» "
+                "e **um registo por aluno** para alinhar a percentagem."
             )
             _rc = risk_color(proba)
             _bg, _bd = _risk_ficha_panel_rgba(proba)
@@ -837,7 +972,7 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
                     "zona ainda mais alta na legenda. Valores **abaixo de 46%** aparecem em **verde** (faixa baixa)."
                 )
 
-            _eng_row = _get_engineered_row_for_display(df, ra)
+            _eng_row = _get_engineered_row_for_display(df, ra, int(feats["Ano"]))
             st.markdown(
                 _risk_heading_html(
                     "Olhar pedagógico",
@@ -866,43 +1001,43 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
                 unsafe_allow_html=True,
             )
             with st.container(border=True):
+                _dict_ml = rows_to_prompt_block(merge_dictionary_with_dataframe(df, load_dictionary()))
                 diag = generate_diagnosis_text(
                     nome,
                     ra,
                     proba,
                     shap_pairs,
-                    theo_context_block=theo_context_block,
+                    theo_context_block=_dict_ml,
                     feats=feats,
                 )
                 st.markdown(diag)
 
             with st.expander("Modo técnico: simulação manual (opcional)", expanded=False):
                 st.markdown(
-                    "**Aviso:** a simulação altera só os indicadores dos controlos; outras variáveis do modelo podem "
+                    "**Aviso:** a simulação altera só os indicadores dos **controles**; outras variáveis do modelo podem "
                     "permanecer alinhadas à **última ficha** na base — o resultado é **exploratório**, não substitui "
                     "o risco oficial da secção 2. A base de dados **não** é alterada."
                 )
                 _sim_active = st.checkbox(
-                    "Ativar simulador (mostra controlos e recalcula a probabilidade)",
+                    "Ativar simulador (mostra os controles e recalcula a probabilidade)",
                     value=False,
-                    key=f"pm_rsk_sim_on_{ra}",
+                    key=f"pm_rsk_sim_on_{ra}_{int(feats['Ano'])}",
                 )
                 if not _sim_active:
                     st.caption(
-                        "Ligue a opção acima para abrir o painel de controlos e comparar cenários com a ficha."
+                        "Ligue acima para abrir os **controles** e testar cenários em cima da ficha (sem gravar na base)."
                     )
                 else:
                     st.markdown(
                         _risk_heading_html(
                             "Simulador «e se…?»",
-                            "Esquerda: controlos (0–10). Direita: novo risco e comparação. IPV vem da base.",
+                            "Deslize para testar outro cenário. **À direita** aparece o novo risco. Fase, turma, ano e pedra **seguem a ficha** (não dá para mudar aqui).",
                             tight_top=True,
                         ),
                         unsafe_allow_html=True,
                     )
                     st.caption(
-                        "Cada alteração recalcula o modelo (IAA−IDA, distância à média da turma, Δ INDE como no treino). "
-                        "A base **não** é alterada."
+                        "Cada alteração recalcula o modelo (IAA−IDA, distância à média da turma, Δ INDE). A base **não** é alterada."
                     )
 
                     sim = dict(base_feats)
@@ -914,197 +1049,276 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
         
                     _sim_baseline = snapshot_sim_baseline(sim)
         
-                    col_ctrl, col_main = st.columns([0.38, 0.62], gap="medium")
+                    st.info(
+                        "**Dica:** em cada bloco, o deslizador está na **faixa numérica** (ex.: 0 a 10). "
+                        "**Na ficha** = valor do relatório; **No controle** = valor que você está simulando agora. "
+                        "A porcentagem colorida só compara esses dois (verde = controle **maior** que a ficha)."
+                    )
+        
+                    col_ctrl, col_main = st.columns([0.42, 0.58], gap="medium")
         
                     with col_ctrl:
-                        st.markdown("**Atitude (impacto alto)**")
+                        st.markdown("##### Atitude (impacto alto)")
+                        st.markdown("**IEG — Engajamento** · escala 0 a 10")
                         sim["IEG"] = st.slider(
-                            "IEG — Engajamento", 0.0, 10.0, float(sim["IEG"]), 0.1, key="pm_rsk_ieg"
+                            " ",
+                            0.0,
+                            10.0,
+                            float(sim["IEG"]),
+                            0.1,
+                            key="pm_rsk_ieg",
+                            label_visibility="collapsed",
+                            help="Arraste para mudar o engajamento em relação ao valor da ficha.",
                         )
+                        st.markdown(
+                            _sim_ficha_controle_resumo_html(_sim_baseline, "IEG", sim["IEG"]),
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("**IAA — Autoavaliação** · escala 0 a 10")
                         sim["IAA"] = st.slider(
-                            "IAA — Autoavaliação", 0.0, 10.0, float(sim["IAA"]), 0.1, key="pm_rsk_iaa"
+                            " ",
+                            0.0,
+                            10.0,
+                            float(sim["IAA"]),
+                            0.1,
+                            key="pm_rsk_iaa",
+                            label_visibility="collapsed",
                         )
+                        st.markdown(
+                            _sim_ficha_controle_resumo_html(_sim_baseline, "IAA", sim["IAA"]),
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("**IPS — Psicossocial** · escala 0 a 10")
                         sim["IPS"] = st.slider(
-                            "IPS — Psicossocial", 0.0, 10.0, float(sim["IPS"]), 0.1, key="pm_rsk_ips"
+                            " ",
+                            0.0,
+                            10.0,
+                            float(sim["IPS"]),
+                            0.1,
+                            key="pm_rsk_ips",
+                            label_visibility="collapsed",
+                        )
+                        st.markdown(
+                            _sim_ficha_controle_resumo_html(_sim_baseline, "IPS", sim["IPS"]),
+                            unsafe_allow_html=True,
                         )
         
-                        st.markdown("**Acadêmico**")
-                        sim["INDE"] = st.slider("INDE", 0.0, 10.0, float(sim["INDE"]), 0.1, key="pm_rsk_inde")
+                        st.markdown("##### Acadêmico")
+                        st.markdown("**INDE** · escala 0 a 10")
+                        sim["INDE"] = st.slider(
+                            " ",
+                            0.0,
+                            10.0,
+                            float(sim["INDE"]),
+                            0.1,
+                            key="pm_rsk_inde",
+                            label_visibility="collapsed",
+                        )
+                        st.markdown(
+                            _sim_ficha_controle_resumo_html(_sim_baseline, "INDE", sim["INDE"]),
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("**IDA — Aprendizagem** · escala 0 a 10")
                         sim["IDA"] = st.slider(
-                            "IDA — Aprendizagem (nota real)", 0.0, 10.0, float(sim["IDA"]), 0.1, key="pm_rsk_ida"
+                            " ",
+                            0.0,
+                            10.0,
+                            float(sim["IDA"]),
+                            0.1,
+                            key="pm_rsk_ida",
+                            label_visibility="collapsed",
                         )
-                        sim["IAN"] = st.slider("IAN", 0.0, 10.0, float(sim["IAN"]), 0.1, key="pm_rsk_ian")
-                        sim["MAT"] = st.slider("MAT", 0.0, 10.0, float(sim["MAT"]), 0.1, key="pm_rsk_mat")
-                        sim["POR"] = st.slider("POR", 0.0, 10.0, float(sim["POR"]), 0.1, key="pm_rsk_por")
+                        st.markdown(
+                            _sim_ficha_controle_resumo_html(_sim_baseline, "IDA", sim["IDA"]),
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("**IAN** · escala 0 a 10")
+                        sim["IAN"] = st.slider(
+                            " ",
+                            0.0,
+                            10.0,
+                            float(sim["IAN"]),
+                            0.1,
+                            key="pm_rsk_ian",
+                            label_visibility="collapsed",
+                        )
+                        st.markdown(
+                            _sim_ficha_controle_resumo_html(_sim_baseline, "IAN", sim["IAN"]),
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("**MAT** · escala 0 a 10")
+                        sim["MAT"] = st.slider(
+                            " ",
+                            0.0,
+                            10.0,
+                            float(sim["MAT"]),
+                            0.1,
+                            key="pm_rsk_mat",
+                            label_visibility="collapsed",
+                        )
+                        st.markdown(
+                            _sim_ficha_controle_resumo_html(_sim_baseline, "MAT", sim["MAT"]),
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown("**POR** · escala 0 a 10")
+                        sim["POR"] = st.slider(
+                            " ",
+                            0.0,
+                            10.0,
+                            float(sim["POR"]),
+                            0.1,
+                            key="pm_rsk_por",
+                            label_visibility="collapsed",
+                        )
+                        st.markdown(
+                            _sim_ficha_controle_resumo_html(_sim_baseline, "POR", sim["POR"]),
+                            unsafe_allow_html=True,
+                        )
         
-                        st.markdown("**Trajetória**")
+                        st.markdown("##### Trajetória")
+                        st.markdown("**Δ INDE esperado** · escala −5 a +5")
                         sim["Delta_INDE"] = st.slider(
-                            "Evolução esperada (Δ INDE)",
+                            " ",
                             -5.0,
                             5.0,
                             float(sim["Delta_INDE"]),
                             0.1,
                             key="pm_rsk_delta_inde",
-                            help="Tendência de melhora ou queda do INDE no recurso «delta_inde» do modelo — frequentemente pesa junto com o INDE instantâneo.",
+                            label_visibility="collapsed",
+                            help="Variação de INDE usada pelo modelo neste cenário.",
                         )
-                        st.caption("Δ INDE mede evolução esperada; pode compensar um INDE instantâneo mais baixo.")
+                        st.markdown(
+                            _sim_ficha_controle_resumo_html(
+                                _sim_baseline, "Delta_INDE", sim["Delta_INDE"], nd=2
+                            ),
+                            unsafe_allow_html=True,
+                        )
                         _choque_ui = float(sim["IAA"]) - float(sim["IDA"])
-                        st.caption(f"**Choque de realidade** (IAA − IDA) neste cenário: **{_choque_ui:+.1f}**.")
-        
-                        st.markdown("**Contexto (ficha)**")
                         st.caption(
-                            f"Fase {int(base_feats['Fase'])} · Pedra {_pedra_ord_to_name(base_feats['Pedra_ord'])} · "
-                            f"Turma {_turma_ord_to_letter(base_feats['Turma_ord'])} · Ano {int(base_feats['Ano'])}"
-                        )
-                        with st.expander("Notas sobre Fase 8 e Pedra Quartzo no modelo", expanded=False):
-                            st.markdown(
-                                "No histórico usado no treino, combinações com **Fase 8** ou **Pedra Quartzo** tendem a estar "
-                                "associadas a maior probabilidade de risco no modelo — não são juízos sobre o aluno, "
-                                "mas contexto estatístico."
-                            )
-                        if int(round(base_feats["Fase"])) == 8:
-                            st.warning(
-                                "**Fase 8** neste registro — contexto que o modelo trata como sensível."
-                            )
-                        if int(round(base_feats["Pedra_ord"])) == 1:
-                            st.warning(
-                                "**Pedra Quartzo** neste registro — nível associado a maior risco no histórico treinado."
-                            )
-        
-                        with st.expander(
-                            "Cenário avançado: mudar fase, turma, ano ou pedra (opcional)",
-                            expanded=False,
-                        ):
-                            st.caption(
-                                "Só para simulações. Para acompanhar o registro atual, deixe fechado ou volte aos valores da base."
-                            )
-                            sim["Fase"] = st.slider(
-                                "Fase do programa",
-                                1.0,
-                                8.0,
-                                float(sim["Fase"]),
-                                1.0,
-                                key="pm_rsk_fase",
-                                help="Número da fase (1 a 8), como no relatório.",
-                            )
-                            sim["Turma_ord"] = st.slider(
-                                "Turma (1 = A … 5 = E)",
-                                1.0,
-                                5.0,
-                                float(sim["Turma_ord"]),
-                                1.0,
-                                key="pm_rsk_turma",
-                                help="Use o número correspondente à letra da turma na escola.",
-                            )
-                            sim["Ano"] = st.slider(
-                                "Ano de referência",
-                                float(df["Ano"].min()),
-                                float(df["Ano"].max()),
-                                float(sim["Ano"]),
-                                1.0,
-                                key="pm_rsk_ano",
-                            )
-                            sim["Pedra_ord"] = st.slider(
-                                "Pedra (nível de desempenho)",
-                                1.0,
-                                4.0,
-                                float(sim["Pedra_ord"]),
-                                1.0,
-                                key="pm_rsk_pedra",
-                                help="1 = Quartzo, 2 = Ágata, 3 = Ametista, 4 = Topázio.",
-                            )
-        
-                        _ctx_changed = (
-                            int(round(sim["Fase"])) != int(round(base_feats["Fase"]))
-                            or int(round(sim["Turma_ord"])) != int(round(base_feats["Turma_ord"]))
-                            or int(round(sim["Ano"])) != int(round(base_feats["Ano"]))
-                            or int(round(sim["Pedra_ord"])) != int(round(base_feats["Pedra_ord"]))
-                        )
-                        _ctx_note = (
-                            " _(fase / turma / ano / pedra alterados no cenário avançado)_"
-                            if _ctx_changed
-                            else " _(contexto = base)_"
-                        )
-                        st.caption(
-                            f"**Resumo do cenário**{_ctx_note}: "
-                            f"Fase **{int(sim['Fase'])}** · turma **{_turma_ord_to_letter(sim['Turma_ord'])}** "
-                            f"· ano **{int(sim['Ano'])}** · pedra **{_pedra_ord_to_name(sim['Pedra_ord'])}** · "
-                            f"INDE **{sim['INDE']:.1f}** · IDA **{sim['IDA']:.1f}** · IAN **{sim['IAN']:.1f}** · "
-                            f"IEG **{sim['IEG']:.1f}** · IAA **{sim['IAA']:.1f}** · IPS **{sim['IPS']:.1f}** · "
-                            f"MAT **{sim['MAT']:.1f}** · POR **{sim['POR']:.1f}** · ΔINDE **{sim['Delta_INDE']:+.1f}** · "
-                            f"IPV (base) **{sim['IPV']:.1f}**"
+                            f"**IAA − IDA** neste cenário: **{_choque_ui:+.1f}**. "
+                            f"**Contexto fixo (só ficha, sem deslizador):** Fase **{int(base_feats['Fase'])}** · "
+                            f"Turma **{_turma_ord_to_letter(base_feats['Turma_ord'])}** · Ano **{int(base_feats['Ano'])}** · "
+                            f"Pedra **{_pedra_ord_to_name(base_feats['Pedra_ord'])}** · IPV **{float(sim['IPV']):.1f}**."
                         )
         
                     new_p = predict_row_after_simulation(bundle, df, ra, sim)
+                    # Com os mesmos números da ficha, o caminho do simulador (reengenharia + derivadas) pode divergir
+                    # da entrada usada na secção 2 (`row_matrix_for_ficha_feats`). Forçamos o mesmo risco da ficha.
+                    if (
+                        new_p is not None
+                        and not (isinstance(new_p, float) and np.isnan(new_p))
+                        and sim_matches_base_ficha(sim, _sim_baseline)
+                    ):
+                        new_p = float(proba)
         
                     with col_main:
                         if new_p is None or (isinstance(new_p, float) and np.isnan(new_p)):
                             st.error("Não foi possível calcular o risco simulado para este RA.")
                         else:
                             delta_pp = (new_p - proba) * 100.0
-                            with st.container(border=True):
-                                st.markdown("**Resultado da simulação**")
-                                crit46 = float(new_p) > OPERATIONAL_HIGH_RISK_THRESHOLD
-                                th_txt = (
-                                    "Acima do limiar de 46% (atenção)."
-                                    if crit46
-                                    else "Igual ou abaixo de 46%."
+                            _sim_pct = float(new_p) * 100.0
+                            if abs(delta_pp) < 0.08:
+                                _sum_line = (
+                                    "**Quase igual** à ficha original — os números batem com o registo na base."
+                                    if sim_matches_base_ficha(sim, _sim_baseline)
+                                    else "**Pouca diferença** em relação à ficha: mexer nos controles quase não mudou o resultado."
                                 )
-                                if crit46:
-                                    st.warning(f"Limiar 46%: {th_txt}")
-                                else:
-                                    st.success(f"Limiar 46%: {th_txt}")
-                                st.metric(
-                                    "Probabilidade simulada de alto risco",
-                                    f"{float(new_p) * 100:.1f}%",
+                            elif delta_pp > 0:
+                                _sum_line = (
+                                    f"**Sobe cerca de {delta_pp:.1f} pontos** na escala de 0 a 100 em relação à ficha — "
+                                    "a estimativa fica **mais alta** do que no registo original."
                                 )
-                                _sim_pct = float(new_p) * 100.0
-                                if abs(delta_pp) < 0.08:
-                                    _sum_line = (
-                                        "**praticamente igual** à probabilidade da ficha na base."
-                                        if sim_matches_base_ficha(sim, _sim_baseline)
-                                        else "**quase igual** à da ficha — os controlos mudaram pouco o resultado."
-                                    )
-                                elif delta_pp > 0:
-                                    _sum_line = (
-                                        f"**sobe cerca de {delta_pp:.1f} pontos** na escala de 0 a 100 em relação à ficha "
-                                        "(o modelo lê **mais** alerta)."
-                                    )
-                                else:
-                                    _sum_line = (
-                                        f"**desce cerca de {abs(delta_pp):.1f} pontos** na escala de 0 a 100 em relação à ficha "
-                                        "(o modelo lê **menos** alerta)."
-                                    )
-                                st.caption(
-                                    f"Com os números que pôs nos controlos, a ferramenta estima **{_sim_pct:.1f}%** "
-                                    f"de probabilidade de alto risco — {_sum_line}"
+                            else:
+                                _sum_line = (
+                                    f"**Desce cerca de {abs(delta_pp):.1f} pontos** na escala de 0 a 100 em relação à ficha — "
+                                    "a estimativa fica **mais baixa** do que no registo original (**só** vale o que os números "
+                                    "dos controles representam de verdade para o aluno)."
                                 )
-        
-                                _cap_f8 = int(round(sim["Fase"])) == 8
-                                _cap_qz = int(round(sim["Pedra_ord"])) == 1
-                                if _cap_f8 or _cap_qz:
-                                    if _cap_f8 and _cap_qz:
-                                        _cap_ctx = (
-                                            "No cenário atual, **Fase 8** e **Pedra Quartzo** reforçam o contexto de risco no modelo — "
-                                            "combine com os indicadores ajustados."
-                                        )
-                                    elif _cap_f8:
-                                        _cap_ctx = (
-                                            "No cenário atual, **Fase 8** reforça o contexto de risco no modelo — "
-                                            "combine com os indicadores ajustados."
-                                        )
-                                    else:
-                                        _cap_ctx = (
-                                            "No cenário atual, **Pedra Quartzo** reforça o contexto de risco no modelo — "
-                                            "combine com os indicadores ajustados."
-                                        )
-                                    st.caption(_cap_ctx)
-        
+
                             with st.container(border=True):
                                 st.markdown(
                                     _risk_subheading_muted(
                                         "Interpretação rápida",
-                                        "O que estes números sugerem, em linguagem simples (use também o gráfico de fatores acima).",
+                                        "Tudo num só lugar: **ficha** = dados originais; **cenário** = o que você mudou nos deslizadores. "
+                                        "O **gráfico de fatores** acima mostra o que mais puxa o resultado neste aluno.",
+                                    ),
+                                    unsafe_allow_html=True,
+                                )
+
+                                crit46 = float(new_p) > OPERATIONAL_HIGH_RISK_THRESHOLD
+                                if crit46:
+                                    st.warning(
+                                        "**Zona de atenção:** neste cenário o modelo estima **mais de 46%** de probabilidade "
+                                        "de alto risco (na escala deste painel). Cruze com o que a escola observa e com o gráfico de fatores."
+                                    )
+                                else:
+                                    st.success(
+                                        "**Zona verde:** neste cenário o modelo fica **até 46%** nessa escala. "
+                                        "É um apoio à conversa — não substitui o olhar da equipe."
+                                    )
+
+                                m_ficha, m_cen = st.columns((1, 1), gap="small")
+                                with m_ficha:
+                                    st.metric(
+                                        label="Na ficha (original)",
+                                        value=f"{proba * 100:.1f}%",
+                                        help="Estimativa com os dados tal como estão na base, antes de mudar os controles.",
+                                    )
+                                with m_cen:
+                                    st.metric(
+                                        label="Neste cenário (controles)",
+                                        value=f"{_sim_pct:.1f}%",
+                                        help="Estimativa depois dos valores que você colocou nos deslizadores à esquerda.",
+                                    )
+
+                                if abs(delta_pp) < 0.08:
+                                    st.markdown(
+                                        f"**Em poucas palavras:** **{_sim_pct:.1f}%** com os controles atuais. {_sum_line}"
+                                    )
+                                else:
+                                    st.markdown(
+                                        f"**Em poucas palavras:** na ficha (**{proba * 100:.1f}%**) → com os controles (**{_sim_pct:.1f}%**). "
+                                        f"{_sum_line}"
+                                    )
+
+                                if abs(delta_pp) < 0.08:
+                                    if sim_matches_base_ficha(sim, _sim_baseline):
+                                        _delta_html = (
+                                            "<strong>Igual à ficha:</strong> os controles reproduzem o registo na base — "
+                                            "a percentagem coincide. <strong>Altere os indicadores</strong> para explorar outros cenários."
+                                        )
+                                    else:
+                                        _delta_html = (
+                                            "<strong>Quase igual à ficha:</strong> a diferença é menor que **0,1** na escala de 0 a 100 — "
+                                            "as mudanças nos controles pouco mexeram no resultado para este aluno."
+                                        )
+                                elif delta_pp > 0:
+                                    _delta_html = (
+                                        f"<strong>Diferença frente à ficha:</strong> cerca de <strong>{delta_pp:.1f}</strong> pontos "
+                                        "a <strong>mais</strong> na escala de 0 a 100 — a leitura automática associa isso a "
+                                        "<strong>mais</strong> chance estimada de defasagem ou evasão <em>se</em> estes números "
+                                        "refletirem o aluno."
+                                    )
+                                else:
+                                    _delta_html = (
+                                        f"<strong>Diferença frente à ficha:</strong> cerca de <strong>{abs(delta_pp):.1f}</strong> pontos "
+                                        "a <strong>menos</strong> na escala de 0 a 100 — a leitura automática associa isso a "
+                                        "<strong>menos</strong> chance estimada de defasagem ou evasão <em>se</em> estes números "
+                                        "refletirem o aluno."
+                                    )
+                                st.markdown(
+                                    f'<div class="pm-risk-delta-box">{_delta_html}</div>',
+                                    unsafe_allow_html=True,
+                                )
+                                st.caption(
+                                    "**Dica:** cada «ponto» na diferença = 1 unidade na escala de 0 a 100% (em relatórios técnicos chama-se "
+                                    "**ponto percentual**)."
+                                )
+
+                                st.markdown(
+                                    _risk_subheading_muted(
+                                        "Leituras que costumam ajudar",
+                                        "Ideias curtas com base nos números do cenário — **sempre** junto da equipe e do que a escola observa.",
                                     ),
                                     unsafe_allow_html=True,
                                 )
@@ -1116,101 +1330,7 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
                                     float(sim["IDA"]),
                                 ):
                                     st.markdown(f"- {_line}")
-        
-                                if "pm_rsk_plan_suggest" not in st.session_state:
-                                    st.session_state.pm_rsk_plan_suggest = {"key": "", "result": None}
-                                _plan_key = _risk_plan_session_key(ra, sim)
-        
-                                st.caption(
-                                    "A sugestão abaixo só altera **IEG** (engajamento) e **IDA** (aprendizagem) no modelo; "
-                                    "os outros controlos ficam fixos neste cálculo."
-                                )
-                                if st.button("Sugerir plano de ação", key=f"pm_rsk_suggest_plan_{ra}"):
-        
-                                    def _plan_predict(s: dict[str, Any]) -> float:
-                                        return float(predict_row_after_simulation(bundle, df, ra, s))
-        
-                                    st.session_state.pm_rsk_plan_suggest = {
-                                        "key": _plan_key,
-                                        "result": suggest_minimal_ieg_ida(
-                                            sim, _plan_predict, threshold=OPERATIONAL_HIGH_RISK_THRESHOLD, step=0.25
-                                        ),
-                                    }
-        
-                                _plan_cache = st.session_state.pm_rsk_plan_suggest
-                                if _plan_cache["key"] == _plan_key and _plan_cache["result"] is not None:
-                                    _pres = _plan_cache["result"]
-                                    if _pres.status == "already_below":
-                                        st.info(
-                                            "Neste cenário a probabilidade já está **abaixo de 46%** no modelo — não faz sentido "
-                                            "«subir» IEG ou IDA só para passar no número. Use os controlos para ver o que manteria "
-                                            "o aluno alinhado ao que a escola observa."
-                                        )
-                                    elif _pres.status == "found" and _pres.ieg is not None and _pres.ida is not None:
-                                        st.success(
-                                            "Para ficar **abaixo de 46%** neste modelo (com os outros eixos fixos), uma combinação "
-                                            "possível seria **IEG** em "
-                                            f"**{_pres.ieg:.2f}** e **IDA** em **{_pres.ida:.2f}** "
-                                            "(entre os pares testados, é uma das que exige **menos** alteração a partir do cenário atual)."
-                                        )
-                                    else:
-                                        st.warning(
-                                            "Não foi possível descer **abaixo de 46%** só subindo **IEG** e **IDA** até **10** "
-                                            "(passo 0,25). Outros eixos (atitude, trajetória, contexto) também pesam no modelo — "
-                                            "veja o **gráfico de fatores** (SHAP) e ajuste outros controlos, ou converse com a equipe."
-                                        )
-        
-                                st.markdown(
-                                    _risk_subheading_muted(
-                                        "Comparar ficha e simulação",
-                                        "A **ficha** é o registo na base; a **simulação** usa os valores dos controlos.",
-                                    ),
-                                    unsafe_allow_html=True,
-                                )
-                                cmp1, cmp2 = st.columns((1, 1), gap="small")
-                                with cmp1:
-                                    st.metric(
-                                        label="Risco na ficha (base)",
-                                        value=f"{proba * 100:.1f}%",
-                                        help="Probabilidade com os dados originais do relatório.",
-                                    )
-                                with cmp2:
-                                    st.metric(
-                                        label="Risco com este cenário",
-                                        value=f"{float(new_p) * 100:.1f}%",
-                                        help="Probabilidade depois de alterar os controlos; a diferença em relação à ficha está no quadro abaixo.",
-                                    )
-        
-                                if abs(delta_pp) < 0.08:
-                                    if sim_matches_base_ficha(sim, _sim_baseline):
-                                        _delta_html = (
-                                            "<strong>Igual à ficha:</strong> os controlos reproduzem o registo na base — "
-                                            "a percentagem coincide. <strong>Altere os indicadores</strong> para explorar outros cenários."
-                                        )
-                                    else:
-                                        _delta_html = (
-                                            "<strong>Quase igual à ficha:</strong> a diferença é menor que **0,1** na escala de 0 a 100 — "
-                                            "as mudanças nos controlos pouco mexeram no resultado para este aluno."
-                                        )
-                                elif delta_pp > 0:
-                                    _delta_html = (
-                                        f"<strong>Em relação à ficha, o risco subiu cerca de {delta_pp:.1f} pontos</strong> "
-                                        "na escala de 0 a 100 — o modelo lê <strong>mais</strong> probabilidade de defasagem ou evasão."
-                                    )
-                                else:
-                                    _delta_html = (
-                                        f"<strong>Em relação à ficha, o risco desceu cerca de {abs(delta_pp):.1f} pontos</strong> "
-                                        "na escala de 0 a 100 — o modelo lê <strong>menos</strong> probabilidade de defasagem ou evasão."
-                                    )
-                                st.markdown(
-                                    f'<div class="pm-risk-delta-box">{_delta_html}</div>',
-                                    unsafe_allow_html=True,
-                                )
-                                st.caption(
-                                    "Em documentos técnicos esta diferença chama-se **pontos percentuais (p.p.)**: "
-                                    "cada ponto = 1 unidade na escala de 0 a 100% da probabilidade."
-                                )
-        
+
                                 _media_tb = _media_turma_base_optional(_eng_row)
                                 st.markdown(
                                     _risk_subheading_muted(
@@ -1273,81 +1393,224 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
 
         else:
             st.info(
-                "**Próximo passo:** indique um **RA** válido ou escolha um **nome** na lista acima para ver risco na ficha, "
+                "**Próximo passo:** escolhe um aluno na caixa acima (podes escrever ou colar o RA) para ver risco na ficha, "
                 "SHAP e parecer do Theo (e, se precisar, simulação no modo técnico)."
             )
 
     with tab2:
         st.markdown(
             _risk_heading_html(
-                "Lista ordenada por risco",
-                "Filtros com **fases 1–8** e **turmas A–E** normalizados (remove duplicados por grafia). "
-                "A tabela mostra os alunos com maior probabilidade estimada.",
+                "Matriz de priorização",
+                "Lista do **maior** para o **menor** risco (probabilidade do modelo). Filtra por **ano** (por defeito 2024), **fase** (1–8) e **turma** (A–E); "
+                "só entram os dados que estão carregados agora no app.",
                 tight_top=True,
             ),
             unsafe_allow_html=True,
         )
-        st.info(
-            "Ordenação automática pelo **modelo** sobre os dados carregados — não substitui listas oficiais nem decisões "
-            "da escola."
-        )
-        fases_opts = ranking_fase_options(df)
-        turmas_opts = ranking_turma_letter_options(df)
-        turmas_ui = [""] + turmas_opts
-        if not fases_opts:
+        with st.expander("O que essa tela faz (e o que ela não substitui)", expanded=False):
+            st.markdown(
+                f"- Aqui a gente usa **{OPERATIONAL_HIGH_RISK_THRESHOLD:.0%}** como marca de **alto risco** na interface — foi assim que o modelo foi calibrado pra operar no dia a dia.\n"
+                "- Isso **ajuda** na triagem, mas **não troca** regra da escola, ata de CIEP, lista oficial nem o que a equipe já sabe do aluno na prática.\n"
+                "- **Ano de referência na lista:** por defeito **2024** (se existir na base); **Todos os anos** volta ao recorte sem filtro de ano. Com um ano fixo + **um registo por aluno**, a percentagem **bate com a ficha** da outra aba se escolheres o **mesmo ano** lá.\n"
+                "- Com **«Todos os registos do recorte»** (checkbox desligado) e ano **Todos**, vês todas as linhas; o mesmo RA pode ter riscos diferentes por ano.\n"
+                "- Com **«Um registo por aluno»** ligado e ano **Todos**, usa-se o **último ano global** por RA e depois fase/turma.\n"
+                "- A ordem vem **só do modelo** em cima do Parquet que tá aberto — não é documento de encaminhamento nem decisão automática."
+            )
+
+        if not ranking_fase_options(df):
             st.warning("Não há valores de **Fase** reconhecíveis (1–8) na base carregada.")
         else:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                f_sel = st.selectbox(
-                    "Fase do programa",
-                    fases_opts,
-                    index=0,
-                    format_func=lambda x: f"Fase {int(x)}",
-                    key="pm_rsk_tab2_fase",
-                )
-            with c2:
-                t_sel = st.selectbox(
-                    "Turma (opcional)",
-                    turmas_ui,
-                    index=0,
-                    format_func=lambda x: "Todas as turmas" if x == "" else f"Turma {x}",
-                    key="pm_rsk_tab2_turma",
-                )
-            with c3:
-                topn = st.selectbox("Quantos no topo", [10, 20], index=0, key="pm_rsk_tab2_top")
-            mask = ranking_mask(df, int(f_sel), str(t_sel))
-            ranked = predict_risk_batch(bundle, df, mask).head(topn)
-            if ranked.empty:
-                st.warning(
-                    "**Nenhum aluno** neste filtro — experimente outra **fase**, escolha **Todas as turmas** ou verifique se a base "
-                    "tem registros para essa combinação."
+            st.markdown(
+                _risk_subheading_muted(
+                    "Critérios de recorte",
+                    "Ano de referência (por defeito 2024), depois fase (ou **todas**) e turma — só aparecem turmas que **existem** no recorte atual.",
+                ),
+                unsafe_allow_html=True,
+            )
+            _has_ref_year = ("Ano" in df.columns) or ("ano_referencia" in df.columns)
+            _years_tab2 = reference_years_available(df) if _has_ref_year else []
+            sel_ref_year: int | None
+            if _years_tab2:
+                _year_opts: list[int | None] = _years_tab2 + [None]
+                _def_y_idx = _year_opts.index(2024) if 2024 in _year_opts else 0
+                sel_ref_year = st.selectbox(
+                    "Ano de referência na lista",
+                    options=_year_opts,
+                    index=_def_y_idx,
+                    format_func=lambda x: "Todos os anos" if x is None else str(int(x)),
+                    key="pm_rsk_tab2_ref_year",
+                    help="**2024** (se existir) como vista operacional; **Todos** não filtra por ano. Para bater com a ficha: o **mesmo** ano na outra aba + um registo por aluno.",
                 )
             else:
+                sel_ref_year = None
+                st.caption("Sem coluna **Ano** / **ano_referencia** — não dá para filtrar a lista por ano.")
+            _one_per_ra = st.checkbox(
+                "Um registo por aluno — **igual à ficha individual** (no ano escolhido)",
+                value=True,
+                key="pm_rsk_tab2_one_row_per_ra",
+                help="Com **ano fixo** (ex. 2024): um aluno = uma linha desse ano (bate com a ficha desse ano). Com **Todos os anos** + ligado: último ano **global** por RA; depois fase/turma. "
+                "Desligado: todas as linhas do recorte de ano — pode duplicar RA.",
+            )
+            if sel_ref_year is None:
+                _df_basis = latest_row_per_ra_table(df.copy()) if _one_per_ra else df.copy()
+            else:
+                _yi = int(sel_ref_year)
+                _df_basis = (
+                    one_row_per_ra_for_year(df.copy(), _yi)
+                    if _one_per_ra
+                    else rows_for_reference_year(df.copy(), _yi)
+                )
+            fases_opts = ranking_fase_options(_df_basis) or ranking_fase_options(df)
+            fase_ui_options: list[int | None] = [None] + fases_opts
+            if _one_per_ra and sel_ref_year is not None:
+                st.caption(
+                    f"**Fase** e **turma** são as do registo de **{int(sel_ref_year)}** — alinha com a ficha se escolheres o mesmo ano na **Análise individual**."
+                )
+            elif _one_per_ra:
+                st.caption(
+                    "**Fase** e **turma** do **último ano global** por aluno — na outra aba escolhe o **ano mais recente** da lista para comparar."
+                )
+            c1, c2, c3 = st.columns([1.15, 1.15, 1.0])
+            with c1:
+                f_sel = st.selectbox(
+                    "Fase escolar",
+                    fase_ui_options,
+                    index=0,
+                    format_func=lambda x: "Todas as fases" if x is None else f"Fase {int(x)}",
+                    key="pm_rsk_tab2_fase",
+                    help="Com **Todas**, não filtra por fase; com uma fase fixa, a lista de turmas só mostra letras que aparecem nela.",
+                )
+            turmas_opts = ranking_turma_letter_options_for_fase(_df_basis, f_sel)
+            turmas_ui = [""] + turmas_opts
+            _turma_key = f"pm_rsk_tab2_turma__{f_sel if f_sel is not None else 'all'}"
+            with c2:
+                t_sel = st.selectbox(
+                    "Turma",
+                    turmas_ui,
+                    index=0,
+                    format_func=lambda x: "Todas" if x == "" else f"Turma {x}",
+                    key=_turma_key,
+                    help="Só letras que existem na base **nessa fase** (ou em todas, se fase = Todas).",
+                )
+            with c3:
+                profundidade_opts: list[int | None] = [10, 25, 50, 100, None]
+                topn = st.selectbox(
+                    "Profundidade da lista",
+                    profundidade_opts,
+                    index=0,
+                    key="pm_rsk_tab2_top",
+                    format_func=lambda x: "Todas (recorte inteiro)" if x is None else f"{int(x)} linhas",
+                    help="Limite de linhas na tabela ou **recorte inteiro** — sempre ordenado do maior para o menor risco no filtro atual.",
+                )
+
+            if f_sel is not None and t_sel and turmas_opts and t_sel not in turmas_opts:
+                st.caption(
+                    f"A turma **{t_sel}** não aparece na fase **{int(f_sel)}** nesse arquivo — escolhe outra letra ou **Todas**."
+                )
+
+            mask = ranking_mask(_df_basis, f_sel, str(t_sel))
+            _slice_df = _df_basis.loc[mask].copy()
+            full_ranked = predict_risk_slice(bundle, _slice_df)
+            n_recorte = len(full_ranked)
+            if full_ranked.empty:
+                if sel_ref_year is not None:
+                    st.warning(
+                        f"**Nenhum registo** para o ano **{int(sel_ref_year)}** com este recorte (fase/turma). "
+                        "Tenta **Todos os anos**, outra fase ou turma **Todas**."
+                    )
+                else:
+                    st.warning(
+                        "**Não achou ninguém** com esse filtro. Tenta deixar **Todas** nas turmas, mudar a fase "
+                        "ou conferir se o Parquet tem dado mesmo pra esse recorte."
+                    )
+            else:
+                mean_p = float(full_ranked["risco"].mean())
+                pct_hi = float((full_ranked["risco"] >= OPERATIONAL_HIGH_RISK_THRESHOLD).mean() * 100.0)
+                mx = float(full_ranked["risco"].max())
+                ranked = full_ranked if topn is None else full_ranked.head(int(topn))
+                m1, m2, m3, m4 = st.columns(4)
+                with m1:
+                    st.metric("Registros no recorte", f"{n_recorte:,}".replace(",", "."))
+                with m2:
+                    st.metric("Probabilidade média", f"{mean_p * 100:.1f}%")
+                with m3:
+                    st.metric(
+                        f"≥ limiar ({OPERATIONAL_HIGH_RISK_THRESHOLD:.0%})",
+                        f"{pct_hi:.1f}%",
+                        help="% de linhas no recorte com probabilidade igual ou acima do limiar de alto risco.",
+                    )
+                with m4:
+                    st.metric("Máximo no recorte", f"{mx * 100:.1f}%")
+
+                st.divider()
+                n_show = len(ranked)
+                _n_pt = lambda n: f"{int(n):,}".replace(",", ".")
+                if topn is None:
+                    prior_txt = (
+                        f"Mostrando **todos os {_n_pt(n_show)}** registros do recorte "
+                        "— ordem do modelo do maior para o menor risco."
+                    )
+                else:
+                    prior_txt = (
+                        f"Mostrando **{_n_pt(n_show)}** linhas (limite **{int(topn)}**) de **{_n_pt(n_recorte)}** no recorte "
+                        "— quem tá mais acima na fila do modelo."
+                    )
+                st.markdown(
+                    _risk_subheading_muted(
+                        "Priorização",
+                        prior_txt,
+                    ),
+                    unsafe_allow_html=True,
+                )
+
                 show = ranked.copy()
-                show["Prob. risco (%)"] = (show["risco"] * 100).round(1)
-                out = show[["RA", "Nome", "Fase", "Turma", "Ano", "Prob. risco (%)"]].copy()
+                show["Probabilidade (%)"] = (show["risco"] * 100).round(1)
+                out = show[["RA", "Nome", "Fase", "Turma", "Ano", "Probabilidade (%)"]].copy()
                 st.dataframe(
                     out,
                     width="stretch",
                     hide_index=True,
                     column_config={
-                        "Prob. risco (%)": st.column_config.ProgressColumn(
-                            "Prob. risco",
-                            help="Probabilidade estimada pelo modelo (0–100%). Barras mais cheias = maior valor.",
+                        "RA": st.column_config.TextColumn("RA", help="Identificador do aluno no arquivo."),
+                        "Nome": st.column_config.TextColumn("Nome", width="large"),
+                        "Fase": st.column_config.NumberColumn("Fase", format="%d", help="Fase do programa."),
+                        "Turma": st.column_config.TextColumn("Turma", help="Turma (A–E) no dado."),
+                        "Ano": st.column_config.NumberColumn("Ano ref.", format="%d", help="Ano de referência da linha."),
+                        "Probabilidade (%)": st.column_config.ProgressColumn(
+                            "Prob. alto risco",
+                            help="Chance estimada pelo modelo (0–100%). Quanto mais cheia a barra, maior a prioridade relativa nesse filtro.",
                             format="%.1f",
                             min_value=0,
                             max_value=100,
                         ),
-                        "Nome": st.column_config.TextColumn("Nome", width="medium"),
                     },
+                )
+
+                csv_buf = io.StringIO()
+                out.to_csv(csv_buf, index=False, encoding="utf-8-sig", sep=";")
+                st.download_button(
+                    label="Exportar lista visível (CSV)",
+                    data=csv_buf.getvalue().encode("utf-8-sig"),
+                    file_name=(
+                        f"priorizacao_risco_ano{int(sel_ref_year) if sel_ref_year is not None else 'todos'}"
+                        f"_fase{'todas' if f_sel is None else int(f_sel)}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv"
+                    ),
+                    mime="text/csv",
+                    key="pm_rsk_tab2_export_csv",
+                    help="Mesmas colunas da tabela; separador `;`; UTF-8 com BOM (abre certinho no Excel).",
+                )
+                st.caption(
+                    "Dica: cruza essa ordem com a **ficha** na outra aba e com o que a **equipe** já sabe do aluno antes de bater o martelo."
                 )
 
 
 def render_dictionary(df: pd.DataFrame) -> None:
     st.subheader("Dicionário de dados")
-    st.caption("Edite as descrições e clique em **Salvar dicionário**; o Theo usa este texto no SQL e nas respostas.")
-    rows = load_dictionary()
+    st.caption(
+        "Colunas e ordem vêm do **Parquet carregado** (mesmo ficheiro do chat e dos dashboards). "
+        "Edite as descrições e clique em **Salvar dicionário**; o Theo usa este texto no SQL e nas respostas."
+    )
+    rows = merge_dictionary_with_dataframe(df, load_dictionary())
     edited = st.data_editor(
         pd.DataFrame(rows),
         width="stretch",
@@ -1375,133 +1638,77 @@ def render_dictionary(df: pd.DataFrame) -> None:
     except ValueError:
         csv_show = str(csv_path.resolve())
 
-    with st.expander("Pré-visualizar dados (Parquet / CSV)", expanded=False):
+    with st.expander("Pré-visualizar dados (Parquet em uso)", expanded=False):
         st.markdown(
-            "Confira valores reais ao lado das descrições do dicionário. "
-            "**Parquet** = o mesmo ficheiro e normalização usados no chat e nos dashboards. "
-            "**CSV** = `data/relatorio.csv`, se existir (útil para confrontar com exportações)."
+            "Isto é o **mesmo** `DataFrame` do chat, risco e dashboards (após normalização). "
+            "O dicionário acima alinha-se a estas colunas — **não** ao CSV bruto."
         )
-        st.caption(f"Parquet em uso: `{pq_show}`")
-        preview_source = st.radio(
-            "Origem",
-            ("Parquet (dados carregados)", "CSV (relatorio.csv)"),
-            horizontal=True,
-            key="dict_preview_source",
-        )
+        st.caption(f"Parquet: `{pq_show}`")
         n_preview = st.slider("Linhas a mostrar", 25, 500, 100, 25, key="dict_preview_n")
-
-        if preview_source.startswith("Parquet"):
-            view = df.head(n_preview)
-            st.dataframe(view, width="stretch", hide_index=True)
-            st.caption(f"Total na base carregada: **{len(df)}** linhas × {len(df.columns)} colunas (mostrando {min(n_preview, len(df))}).")
-            sample_csv = view.to_csv(index=False).encode("utf-8-sig")
-            st.download_button(
-                "Descarregar amostra (CSV)",
-                data=sample_csv,
-                file_name="amostra_parquet_carregado.csv",
-                mime="text/csv",
-                key="dict_dl_parquet_sample",
+        view = df.head(n_preview)
+        st.dataframe(view, width="stretch", hide_index=True)
+        st.caption(
+            f"Total na base carregada: **{len(df):,}** linhas × **{len(df.columns)}** colunas (a mostrar {min(n_preview, len(df)):,}).".replace(
+                ",", "."
             )
-        elif not csv_path.exists():
-            st.info(f"Não há ficheiro em `{csv_show}`. Coloque um export CSV aí para pré-visualizar.")
-        else:
-            st.caption(f"Ficheiro: `{csv_show}`")
-            try:
-                csv_df = pd.read_csv(csv_path, nrows=n_preview, encoding="utf-8-sig", low_memory=False)
-            except UnicodeDecodeError:
-                csv_df = pd.read_csv(csv_path, nrows=n_preview, encoding="latin-1", low_memory=False)
-            except Exception as exc:
-                st.error(f"Não foi possível ler o CSV: {exc}")
-            else:
-                st.dataframe(csv_df, width="stretch", hide_index=True)
-                total_hint = (
-                    f"Mostrando as primeiras **{len(csv_df)}** linhas lidas do ficheiro"
-                    + (" (limite do controlo acima)." if len(csv_df) < n_preview else ".")
-                )
-                st.caption(total_hint)
-                st.download_button(
-                    "Descarregar esta pré-visualização (CSV)",
-                    data=csv_df.to_csv(index=False).encode("utf-8-sig"),
-                    file_name="amostra_relatorio_csv.csv",
-                    mime="text/csv",
-                    key="dict_dl_csv_sample",
-                )
-
-
-def _embed_annual_pdf(path: Path, pdf_bytes: bytes) -> None:
-    """Leitor PDF integrado no Streamlit (`st.pdf`); recua para iframe só se necessário."""
-    _pdf_h = min(960, max(520, int(900 * 0.88)))
-    pdf_fn = getattr(st, "pdf", None)
-    if pdf_fn is not None:
-        try:
-            pdf_fn(str(path.resolve()), height=_pdf_h)
-            return
-        except Exception:
-            try:
-                pdf_fn(pdf_bytes, height=_pdf_h)
-                return
-            except Exception as exc:
-                st.warning(
-                    f"O leitor PDF nativo falhou ({exc}). "
-                    "Instale o componente: `pip install streamlit-pdf` (ou `pip install -r requirements.txt`) e **reinicie** a app."
-                )
-    b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
-    if len(b64) > 6_000_000:
-        st.warning(
-            "O PDF é grande demais para pré-visualização embutida neste navegador. Use o descarregar acima."
         )
+        sample_csv = view.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "Descarregar amostra (CSV)",
+            data=sample_csv,
+            file_name="amostra_parquet_carregado.csv",
+            mime="text/csv",
+            key="dict_dl_parquet_sample",
+        )
+        with st.expander("Opcional: pré-visualizar `relatorio.csv` (entrada ao ETL)", expanded=False):
+            st.caption(
+                "Só para confrontar com o export original; colunas podem estar em minúsculas e **não** espelham o DuckDB `dados`."
+            )
+            if not csv_path.exists():
+                st.info(f"Não há ficheiro em `{csv_show}`.")
+            else:
+                st.caption(f"Ficheiro: `{csv_show}`")
+                try:
+                    csv_df = pd.read_csv(csv_path, nrows=n_preview, encoding="utf-8-sig", low_memory=False)
+                except UnicodeDecodeError:
+                    csv_df = pd.read_csv(csv_path, nrows=n_preview, encoding="latin-1", low_memory=False)
+                except Exception as exc:
+                    st.error(f"Não foi possível ler o CSV: {exc}")
+                else:
+                    st.dataframe(csv_df, width="stretch", hide_index=True)
+                    st.caption(
+                        f"Mostrando **{len(csv_df):,}** linhas lidas do CSV".replace(",", ".")
+                        + (" (limite do controle acima)." if len(csv_df) < n_preview else ".")
+                    )
+                    st.download_button(
+                        "Descarregar esta pré-visualização (CSV)",
+                        data=csv_df.to_csv(index=False).encode("utf-8-sig"),
+                        file_name="amostra_relatorio_csv.csv",
+                        mime="text/csv",
+                        key="dict_dl_csv_sample",
+                    )
+
+
+def _embed_annual_site(url: str) -> None:
+    """Mostra o relatório no Streamlit com o mesmo estilo de página cheia que o PDF tinha."""
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        st.error("URL do relatório inválido (é preciso http ou https).")
         return
+
+    _frame_h = min(960, max(520, int(900 * 0.88)))
+    safe_url = html.escape(url.strip(), quote=True)
     iframe = (
-        f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="100%" '
-        f'style="min-height:{_pdf_h}px;border:none;" title="Relatório anual"></iframe>'
+        f'<iframe src="{safe_url}" width="100%" height="100%" '
+        f'style="min-height:{_frame_h}px;border:none;border-radius:6px;" '
+        f'title="Relatório anual" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>'
     )
-    components.html(iframe, height=_pdf_h + 32, scrolling=True)
+    components.html(iframe, height=_frame_h + 32, scrolling=True)
 
 
 def render_annual_report() -> None:
     st.title("Relatório anual")
-    st.caption(
-        "O documento abre **nesta página**, com o leitor do Streamlit. O ficheiro deve estar em "
-        "**assets/relatorio_anual.pdf**. Opcional: link **Gamma** (variável **PM_RELATORIO_ANUAL_GAMMA_URL** ou secret "
-        "**RELATORIO_ANUAL_GAMMA_URL**)."
-    )
-    pdf_bytes: bytes | None = None
-    if not _ANNUAL_PDF_PATH.exists():
-        st.warning(
-            f"PDF não encontrado: `{_ANNUAL_PDF_PATH.relative_to(_ROOT)}`. "
-            "Coloque o relatório nesse caminho para o ver aqui e para descarregar."
-        )
-    else:
-        try:
-            pdf_bytes = _ANNUAL_PDF_PATH.read_bytes()
-        except OSError as exc:
-            st.error(f"Não foi possível ler o PDF: {exc}")
-
-    url = _annual_gamma_url()
-    row_a, row_b = st.columns([2, 1], gap="small")
-    with row_a:
-        if url:
-            st.link_button("Abrir versão interativa no Gamma.app", url, use_container_width=True)
-        else:
-            st.info(
-                "Sem URL do Gamma: defina **PM_RELATORIO_ANUAL_GAMMA_URL** ou **RELATORIO_ANUAL_GAMMA_URL** em secrets."
-            )
-    with row_b:
-        if pdf_bytes is not None:
-            st.download_button(
-                label="Descarregar PDF",
-                data=pdf_bytes,
-                file_name=_ANNUAL_PDF_PATH.name,
-                mime="application/pdf",
-                key="annual_pdf_dl",
-            )
-
-    if pdf_bytes is None:
-        return
-
-    st.divider()
-    st.subheader("Documento")
-    _embed_annual_pdf(_ANNUAL_PDF_PATH, pdf_bytes)
+    _embed_annual_site(_annual_gamma_url())
 
 
 def main() -> None:
@@ -1524,7 +1731,7 @@ def main() -> None:
     ollama_ok = ollama_available()
     df = cached_load_dados()
     bundle = cached_model_bundle()
-    dict_rows = load_dictionary()
+    dict_rows = merge_dictionary_with_dataframe(df, load_dictionary())
     dictionary_block = rows_to_prompt_block(dict_rows)
     annual_plain = _annual_plain_for_theo()
     theo_context_block = merge_theo_context_blocks(
@@ -1600,6 +1807,7 @@ def main() -> None:
         if st.button("Limpar histórico do chat", width="stretch"):
             st.session_state.messages = []
             st.toast("Histórico limpo.", icon="🧹")
+        st.caption("Made by Joe Allan Zirn")
 
     df_sql, sql_runner = make_chat_sql_runner(df, bundle)
 

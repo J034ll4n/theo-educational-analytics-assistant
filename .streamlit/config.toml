@@ -1,0 +1,13 @@
+# Tema por defeito: escuro (alinhado ao CSS em passos_magico/ui/styles.py).
+# O utilizador ainda pode mudar em ☰ → Settings → Theme, mas o arranque é sempre escuro.
+
+[theme]
+base = "dark"
+primaryColor = "#EE145B"
+backgroundColor = "#121218"
+secondaryBackgroundColor = "#16161d"
+textColor = "#e6edf3"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"

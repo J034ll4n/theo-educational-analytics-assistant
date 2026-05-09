@@ -359,6 +359,33 @@ def rewrite_numeric_minus_date_cast(sql: str) -> str:
     return out
 
 
+_COUNT_STAR_COL = re.compile(r"^count_star\(\)\s*$", re.IGNORECASE)
+
+
+def prettify_sql_result_columns(out: pd.DataFrame) -> pd.DataFrame:
+    """DuckDB expõe `COUNT(*)` sem alias como coluna `count_star()` — renomeia para leitura humana/UI."""
+    if out is None or out.empty:
+        return out
+    rename: dict[str, str] = {}
+    occupied = {str(c) for c in out.columns}
+    for c in list(out.columns):
+        if not _COUNT_STAR_COL.match(str(c).strip()):
+            continue
+        for cand in ("total", "n_registos", "quantidade", "contagem", "n"):
+            if cand not in occupied:
+                rename[str(c)] = cand
+                occupied.add(cand)
+                break
+        else:
+            i = 1
+            while f"n_{i}" in occupied:
+                i += 1
+            nm = f"n_{i}"
+            rename[str(c)] = nm
+            occupied.add(nm)
+    return out.rename(columns=rename) if rename else out
+
+
 def apply_sql_rewrites(sql: str, df: pd.DataFrame) -> str:
     """Aplica a mesma cadeia de reescritas que `run_sql` usa antes do LIMIT/execução."""
     limited = normalize_sql_comparison_operators(sql.rstrip().rstrip(";"))
@@ -394,7 +421,7 @@ def run_sql(
         if "limit" not in limited.lower():
             limited = f"{limited} LIMIT 5000"
         try:
-            return con.execute(limited).df()
+            return prettify_sql_result_columns(con.execute(limited).df())
         except duckdb.Error as e:
             msg = str(e) or getattr(e, "message", "") or type(e).__name__
             _RECENT_DUCK_ERRORS.append(msg[:200])

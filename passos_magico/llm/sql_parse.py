@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 
 _SQL_START = re.compile(r"^\s*(?:with|select)\b", re.IGNORECASE)
@@ -81,6 +82,13 @@ def sql_passes_quick_validation(sql: str | None) -> bool:
     return True
 
 
+SUGGESTION_FALLBACK: tuple[str, ...] = (
+    "Comparar o desempenho entre turmas no mesmo ano?",
+    "Ver a distribuição de Pedras por fase?",
+    "Evolução do INDE ao longo dos anos?",
+)
+
+
 def extract_json_suggestions(text: str) -> list[str]:
     import json
 
@@ -109,8 +117,62 @@ def extract_json_suggestions(text: str) -> list[str]:
                 return list(data["sugestoes"])[:3]
         except json.JSONDecodeError:
             pass
-    return [
-        "Comparar o desempenho entre turmas no mesmo ano?",
-        "Ver a distribuição de Pedras por fase?",
-        "Evolução do INDE ao longo dos anos?",
-    ]
+    return list(SUGGESTION_FALLBACK)
+
+
+# Tokens que o LLM costuma inventar como coluna; bloquear cedo se não existirem no Parquet.
+_DISALLOWED_SQL_TOKENS = frozenset(
+    {
+        "feedback",
+        "comentario",
+        "comentarios",
+        "avaliacao",
+        "resumo_anual",
+    }
+)
+
+
+def _sql_without_string_literals(sql: str) -> str:
+    """Remove literais '…' e \"…\" (ingénuo, suficiente para o guard)."""
+    s = sql
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch in "'\"":
+            quote = ch
+            out.append(" ")
+            i += 1
+            while i < n:
+                if s[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if s[i] == quote:
+                    if quote == "'" and i + 1 < n and s[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def sql_guard_disallowed_tokens(sql: str, known_columns: Iterable[str] | None) -> tuple[bool, str]:
+    """
+    Rejeita SQL que referencia tokens sabidamente alucinados se não existirem nas colunas reais.
+    Conservador: só lista fechada em _DISALLOWED_SQL_TOKENS.
+    """
+    if not known_columns:
+        return True, ""
+    known = {str(c).lower() for c in known_columns}
+    cleaned = _sql_without_string_literals(sql).lower()
+    for tok in _DISALLOWED_SQL_TOKENS:
+        if tok in known:
+            continue
+        if re.search(rf"(?<![a-z0-9_]){re.escape(tok)}(?![a-z0-9_])", cleaned):
+            return False, f"Token `{tok}` não corresponde a coluna na base carregada."
+    return True, ""

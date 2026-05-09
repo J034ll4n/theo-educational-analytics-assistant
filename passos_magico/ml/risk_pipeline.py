@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from passos_magico.ml.features import latest_single_row_for_ra
+from passos_magico.ml.features import latest_single_row_for_ra, single_row_for_ra_and_year
 
 RISK_NUM_FEATURES: list[str] = [
     "idade",
@@ -227,6 +227,27 @@ def row_matrix_by_ra(df: pd.DataFrame, ra: str) -> pd.DataFrame | None:
     sub = latest_single_row_for_ra(df, ra).copy()
     if sub.empty:
         return None
+    return risk_X_matrix(sub)
+
+
+def row_matrix_for_ficha_feats(df: pd.DataFrame, feats: dict[str, Any]) -> pd.DataFrame | None:
+    """Matriz de entrada do pipeline alinhada ao registo da ficha (RA + Ano em `feats`); fallback ao último ano."""
+    key = "RA" if "RA" in df.columns else "ra"
+    if key not in df.columns:
+        return None
+    ra = str(feats.get("RA", "")).strip()
+    if not ra:
+        return None
+    ano_raw = feats.get("Ano")
+    if ano_raw is None or pd.isna(ano_raw):
+        return row_matrix_by_ra(df, ra)
+    try:
+        y = int(round(float(ano_raw)))
+    except (TypeError, ValueError):
+        return row_matrix_by_ra(df, ra)
+    sub = single_row_for_ra_and_year(df, ra, y).copy()
+    if sub.empty:
+        return row_matrix_by_ra(df, ra)
     return risk_X_matrix(sub)
 
 

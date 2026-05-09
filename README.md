@@ -258,6 +258,17 @@ OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 **Nota:** no **Streamlit Community Cloud** o processo da app **não** vê o Ollama no teu PC — o Theo em LLM só funciona se tiveres um endpoint Ollama **alcançável a partir da internet** (não documentado por defeito) ou se usares **MVP sem chat LLM** (dashboards + risco + dados). Para vídeo com Theo completo, grava **local** ou numa VM onde Ollama e a app corram juntos.
 
+### Deploy no Streamlit Community Cloud (subir a app)
+
+1. Abre **[share.streamlit.io](https://share.streamlit.io)** e inicia sessão com **GitHub**.
+2. **Create app** → **Deploy a public app from GitHub** → escolhe o repositório **`J034ll4n/theo-educational-analytics-assistant`** (branch **`main`**).
+3. Em **Main file path** define **`app/main.py`** (a entrada da app está em `app/`, não na raiz).
+4. **App URL** (slug) escolhe um nome disponível; **Root directory** deixa em branco (raiz do repo).
+5. Abre **Advanced settings** e confirma **Python 3.12** (é a predefinição na [Community Cloud](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy); alinha com o ambiente local recomendado).
+6. Clica **Deploy** e espera o *build* (`requirements.txt`).
+7. **Dados na Cloud:** o repositório já inclui **`notebooks/Ml/relatorio_final.parquet`** e **`modelo_risco_aluno.pkl`** na raiz — a app deve arrancar sem ficheiros extra. Se quiseres outro Parquet, usa **Secrets** com `PASSOS_PARQUET` (caminho só faz sentido se montares ficheiro no espaço da Cloud; na prática comum é manter o Parquet no Git ou gerar com ETL noutro pipeline).
+8. **Theo (chat):** na Cloud o Ollama local **não** existe; verás a mensagem de indisponibilidade no chat. **Dashboards**, **risco**, **dicionário** e **relatório anual** continuam úteis para demo pública.
+
 ### Deploy reprodutível e dry-run
 
 1. Fixa dependências: `requirements.txt` já usa **versões fixas** (`==`); após instalar numa máquina limpa, podes gerar um *lock* completo com `pip freeze > requirements-lock.txt` para arquivo.

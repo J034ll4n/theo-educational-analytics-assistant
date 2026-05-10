@@ -329,26 +329,6 @@ pytest tests/ -m ollama
 
 ---
 
-
-
-
-
-#DataScience #MachineLearning #Educação #Streamlit #OpenSource #ImpactoSocial
-
----
-
-**Post (versão mais técnica)**
-
-Publiquei [INSERIR LINK] um MVP que integra **consulta analítica em PT** (LLM → SQL em DuckDB sobre Parquet), **dashboards**, **modelo de risco escolar** com **SHAP** e leitura de **contexto textual** (relatório Gamma em Markdown). O desenho privilegia **governança**: limiares explícitos na UI, copy orientada a direção pedagógica e opção de correr **sem** dependências de LLM na nuvem.
-
-Ferramentas: Streamlit, Ollama (`llama3` por defeito), LangChain, imbalanced-learn, XGBoost.
-
-Aberto a críticas construtivas e a ideias para evolução (API, RBAC, multi-instância).
-
-#MLOps #ExplainableAI #EdTech #Python
-
----
-
 *Entrega desenvolvida no âmbito da formação em dados e impacto social — Passos Mágicos / FIAP.*
 
 **Made by Joe Allan Zirn**

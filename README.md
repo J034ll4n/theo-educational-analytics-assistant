@@ -229,6 +229,25 @@ O `run.bat` cria o `.venv`, instala dependências, corre o ETL se faltar `data\d
 
 Atalho com ícone: na raiz existe **`Passos Mágicos.lnk`** (criado via script PowerShell referenciado no `run.bat`, se aplicável no teu ambiente).
 
+### Notebook de ML (`notebooks/Ml/ML_Passos_Magicos.ipynb`)
+
+Se ao correr a primeira célula aparecer **`No module named 'numpy'`** (ou `pandas`, `sklearn`, etc.), o **kernel** do Jupyter está a usar um Python **sem** as dependências do projeto — clonar o repo **não** instala pacotes sozinho.
+
+1. Na **raiz** do repositório, cria o ambiente virtual e instala tudo (igual ao bloco acima):
+
+   ```bash
+   python -m venv .venv
+   .venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+   No Linux/macOS: `source .venv/bin/activate` em vez de `Scripts\activate`.
+
+2. **Liga o notebook a esse Python:** no Jupyter / VS Code / Cursor, **Kernel** ou **Select Interpreter** → escolhe **`.venv\Scripts\python.exe`** (Windows) ou **`.venv/bin/python`**.
+
+3. (Opcional) Registar um kernel com nome fixo: `pip install ipykernel` e  
+   `python -m ipykernel install --user --name passos-magicos --display-name "Passos Mágicos (.venv)"` — depois escolhe **Passos Mágicos (.venv)** como kernel do notebook.
+
 ---
 
 ## 10. Variáveis de ambiente e secrets (local + Streamlit Cloud)

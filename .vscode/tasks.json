@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Instalar dependências e executar app (Streamlit)",
+      "detail": "Cria .venv, pip install -r requirements.txt, ETL se necessário, abre o painel.",
+      "type": "shell",
+      "windows": {
+        "command": ".\\run.bat"
+      },
+      "linux": {
+        "command": "bash ./run.sh"
+      },
+      "osx": {
+        "command": "bash ./run.sh"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

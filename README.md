@@ -212,10 +212,17 @@ pytest tests/test_theo_e2e_optional.py -m ollama -v
 
 ## 9. Como executar
 
-1. Clonar ou copiar o projeto e abrir a pasta na raiz do repositório.
-2. Colocar ou atualizar **`data/relatorio.csv`**.
+### Início rápido depois de clonar (instala tudo e abre a app)
+
+- **Windows:** duplo clique em **`run.bat`** na raiz do repositório (ou abre a pasta no **Cursor / VS Code** e usa **Run Build Task**: `Ctrl+Shift+B` — tarefa predefinida **«Instalar dependências e executar app»**).
+- **Linux / macOS:** na raiz, `chmod +x run.sh` (uma vez) e `./run.sh` — ou no Cursor/VS Code o mesmo **`Ctrl+Shift+B`** se a tarefa de build estiver disponível.
+
+O script cria **`.venv`**, corre **`pip install -r requirements.txt`**, gera **`data/dados.parquet`** com o ETL se faltar, e inicia o **Streamlit**. Não precisa de instalar pacotes na mão antes do primeiro run.
+
+1. Clonar ou copiar o projeto e abrir a pasta na raiz do repositório (no IDE, abrir a pasta que contém `run.bat` / `run.sh`).
+2. Colocar ou atualizar **`data/relatorio.csv`** (se não existir, o ETL pode gerar um CSV de exemplo — ver `scripts/etl.py`).
 3. Garantir **`modelo_risco_aluno.pkl`** na raiz (treinar pelo notebook se necessário).
-4. Executar **`run.bat`** (duplo clique) **ou**, manualmente (o ficheiro **`.streamlit/config.toml`** fixa o **tema escuro** por defeito no Streamlit):
+4. **Executar** conforme o bloco **Início rápido** acima **ou**, manualmente (o ficheiro **`.streamlit/config.toml`** fixa o **tema escuro** por defeito no Streamlit):
 
    ```bat
    py -3 -m venv .venv

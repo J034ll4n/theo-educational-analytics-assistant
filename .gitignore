@@ -19,7 +19,9 @@ build/
 
 # IDEs / OS
 .idea/
-.vscode/
+# Versionamos `.vscode/tasks.json` (build = instalar + Streamlit); resto local.
+.vscode/*
+!.vscode/tasks.json
 *.swp
 .DS_Store
 Thumbs.db

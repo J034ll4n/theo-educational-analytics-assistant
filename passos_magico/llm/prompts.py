@@ -27,10 +27,12 @@ Regras:
 - O ano letivo / calendário escolar está sempre na coluna **Ano** (número inteiro). **Nunca** use a palavra `year` como nome de coluna.
 - Se o usuário enviar um **resumo anual institucional** ou um **terceiro bloco narrativo (Gamma)** no contexto, use-os só para alinhar intenção da pergunta e nomenclatura — **não** invente colunas ou tabelas vindas desse texto; todo SELECT continua em **dados**.
 - **Perguntas complexas** (comparar anos/fases, vários indicadores, “gap” entre métricas, subconjuntos como `risco >= 0.5`): prefira uma única consulta clara; use **CTEs** (`WITH nome AS (...)`) quando organizar etapas ajudar. Sempre filtre/agrupe com **Ano**, **Fase**, **Turma** conforme o pedido.
+- **Recorte temporal (chat):** se o pedido incluir o bloco **«Ano de referência operacional (chat)»**, use **`WHERE Ano = …` com esse ano** em totais, médias, contagens e listas de alunos — é a **visão atual**. **Só** cruze vários anos ou omita o filtro de `Ano` quando o gestor pedir **explícito** histórico, **todos os anos**, **evolução ano a ano**, **linha do tempo**, **comparar anos** ou **desde sempre**. Séries temporais (`GROUP BY Ano`) sem menção ao ano operacional podem usar todos os anos; perguntas genéricas («como estamos», «quantos alunos») **não** são série temporal implícita — mantenha o ano operacional.
 - Se existir a coluna **risco** no dicionário, use-a para probabilidade de alto risco do modelo; não invente outras colunas de risco.
 - Use apenas SELECT. Não use ponto e vírgula no final.
 - Limite resultados quando fizer sentido (ex.: LIMIT 200).
 - **"Quantos / quantas / quanto / total"** sem pedido explícito de **lista de alunos** ou de linhas detalhadas: use `COUNT(*)` ou `COUNT(DISTINCT RA)` e devolva **uma única linha** com **`AS` obrigatório** (`AS total`, `AS n_alunos`, `AS quantidade`, etc.). **Nunca** deixe `COUNT(*)` sem alias — o motor expõe nomes feios (`count_star()`). **Não** devolva uma linha por aluno nesses casos.
+- **Total de alunos / «quantos alunos temos»** (cabeças no **ano atual** do relatório): use **`COUNT(DISTINCT RA)`** com **`WHERE Ano = <ano operacional do bloco temporal>`**. **`COUNT(*)` sem filtrar `Ano`** conta **linhas em todos os anos** (o mesmo RA aparece várias vezes) e **infla** o número — **não** use assim para «total de alunos» salvo se o gestor pedir **todos os anos** ou **registros totais**.
 - Nomes de colunas exatos conforme o esquema e o dicionário enviado pelo usuário (case-sensitive se necessário; use aspas duplas para identificadores com espaço).
 - **Operadores de comparação só em ASCII:** use `>=`, `<=`, `=`, `>`, `<` no SQL. **Nunca** use símbolos Unicode como `≥` ou `≤` — o DuckDB não os aceita como operadores.
 - **Comparações e contagens (público x particular, turma A x B, etc.):** devolva formato **largo** adequado a gráfico de barras: uma coluna de **categoria** (texto claro: ex. `tipo_rede`, `categoria`, `grupo`) e uma coluna de **valor** (`quantidade`, `total` ou `media`). Use `GROUP BY` na dimensão que separa os grupos. **Não** repita a mesma métrica em duas colunas numéricas idênticas nem projete duas vezes a mesma coluna com aliases que gerem gráfico confuso.
@@ -54,7 +56,15 @@ SELECT Ano, AVG(IDA) AS media_ida FROM dados WHERE Ano = 2022 GROUP BY Ano
 
 Pergunta: "Quantos alunos por turma na Fase 8 em 2021?"
 SQL:
-SELECT Turma, COUNT(*) AS total FROM dados WHERE Fase = 8 AND Ano = 2021 GROUP BY Turma ORDER BY total DESC
+SELECT Turma, COUNT(DISTINCT RA) AS total FROM dados WHERE Fase = 8 AND Ano = 2021 GROUP BY Turma ORDER BY total DESC
+
+Pergunta: "Quantos alunos temos no total?" / "Total de alunos" (ano operacional na base = 2024; cabeças distintas nesse ano)
+SQL:
+SELECT COUNT(DISTINCT RA) AS total_alunos FROM dados WHERE Ano = 2024
+
+Pergunta: "Quantas linhas ou registros existem em toda a base, somando todos os anos?"
+SQL:
+SELECT COUNT(*) AS n_linhas_todas FROM dados
 
 Pergunta: "Quantos alunos estão defasados?"  (ex.: coluna booleana defasado no dicionário)
 SQL:
@@ -71,8 +81,9 @@ SELECT CASE TRIM(COALESCE(instituicao_de_ensino, ''))
          WHEN 'Pública' THEN 'Pública'
          ELSE 'Não informado'
        END AS tipo_rede,
-       COUNT(*) AS quantidade
+       COUNT(DISTINCT RA) AS quantidade
 FROM dados
+WHERE Ano = 2024
 GROUP BY 1
 ORDER BY tipo_rede
 
@@ -83,14 +94,15 @@ SELECT CASE
          WHEN trim(lower(COALESCE(escola, ''))) IN ('desconhecido', '', 'nan') THEN 'Não informado'
          ELSE 'Particular'
        END AS tipo_rede,
-       COUNT(*) AS quantidade
+       COUNT(DISTINCT RA) AS quantidade
 FROM dados
+WHERE Ano = 2024
 GROUP BY 1
 ORDER BY tipo_rede
 
 Pergunta: "Quais os principais insights ou destaques em 2022?" (pergunta vaga — sintetize com agregações úteis)
 SQL:
-SELECT Fase, AVG(INDE) AS media_inde, AVG(IDA) AS media_ida, COUNT(*) AS n_alunos
+SELECT Fase, AVG(INDE) AS media_inde, AVG(IDA) AS media_ida, COUNT(DISTINCT RA) AS n_alunos
 FROM dados WHERE Ano = 2022 GROUP BY Fase ORDER BY Fase
 
 Pergunta: "Em 2022, para cada Fase, qual a média de INDE e de IDA e em qual fase o gap (INDE − IDA) é maior?"
@@ -101,9 +113,13 @@ WITH agg AS (
 )
 SELECT Fase, media_inde, media_ida, (media_inde - media_ida) AS gap_inde_ida FROM agg ORDER BY gap_inde_ida DESC
 
-Pergunta: "Compare a média de INDE entre a Fase 6 e a Fase 8 no mesmo ano" (se o ano não for dito, agrupe também por Ano)
+Pergunta: "Compare a média de INDE entre a Fase 6 e a Fase 8 ao longo de todos os anos" (pedido explícito de série por Ano)
 SQL:
 SELECT Ano, Fase, AVG(INDE) AS media_inde FROM dados WHERE Fase IN (6, 8) GROUP BY Ano, Fase ORDER BY Ano, Fase
+
+Pergunta: "Entre a Fase 6 e a 8, quem tem maior média de INDE **agora**?" (sem pedir histórico — usar o ano operacional do bloco temporal, ex. 2024)
+SQL:
+SELECT Fase, AVG(INDE) AS media_inde FROM dados WHERE Fase IN (6, 8) AND Ano = 2024 GROUP BY Fase ORDER BY Fase
 
 Pergunta: "Compare a média de INDE entre a Fase 6 e a Fase 8 em 2022"
 SQL:
@@ -113,9 +129,9 @@ Pergunta: "Mostre a evolução da média de IAN ano a ano."
 SQL:
 SELECT Ano, AVG(IAN) AS media_ian FROM dados GROUP BY Ano ORDER BY Ano
 
-Pergunta: "Entre alunos com risco do modelo ≥ 0,5, como se distribuem por Turma na Fase 8?" (exige coluna risco)
+Pergunta: "Entre alunos com risco do modelo ≥ 0,5, como se distribuem por Turma na Fase 8?" (exige coluna risco; ano operacional)
 SQL:
-SELECT Turma, COUNT(*) AS n_alunos FROM dados WHERE Fase = 8 AND risco >= 0.5 GROUP BY Turma ORDER BY n_alunos DESC
+SELECT Turma, COUNT(DISTINCT RA) AS n_alunos FROM dados WHERE Fase = 8 AND Ano = 2024 AND risco >= 0.5 GROUP BY Turma ORDER BY n_alunos DESC
 
 Pergunta: "Entre as Fases 6 e 8, qual turma tem a menor média de IDA em 2021?"
 SQL:
@@ -281,6 +297,7 @@ Sua resposta deve ser **somente** um bloco ```sql``` com **um único SELECT** v�
 - Se a pergunta pede **média de INDE/IDA por turma** e o resultado vem **só nulos ou zeros**: acrescente `WHERE … AND INDE IS NOT NULL` (ou a coluna do indicador) antes do `GROUP BY`; confirme `Ano`/`Fase` pedidos no `WHERE`.
 - Se a pergunta for **ficha / evolução de um aluno** (`WHERE RA = '…'`) e o `SELECT` listar dezenas de colunas técnicas: reduza a `RA`, `Nome`, `Ano`, `Fase`, `Turma`, `Pedra`, indicadores (`INDE`, `IDA`, …), `risco`, com `ORDER BY Ano` — **sem** `SELECT *`.
 - **Pública vs particular:** se existir **`instituicao_de_ensino`**, agrupe por ela (não use `escola_publica` inexistente). Se só existir **`escola`**, use `CASE` com padrões de nome para rede pública e trate o resto como particular.
+- Se a pergunta for **total de alunos / quantos alunos / cadastro** e o SQL anterior usou **`COUNT(*)` sem `WHERE Ano = …`** com o **ano operacional** do pedido: corrija para **`COUNT(DISTINCT RA)`** + **`WHERE Ano = <ano do bloco temporal>`** (cabeças no ano atual), salvo se o gestor pedia **todos os anos** ou **só registros**.
 """
 
 
@@ -304,16 +321,38 @@ Responda em português do Brasil, em 2–4 parágrafos curtos:
 Sem títulos ###. Tom profissional, caloroso e útil."""
 
 
+def _sql_operational_year_block(
+    reference_year_default: int,
+    reference_years_span: tuple[int, int] | None,
+) -> str:
+    if reference_years_span is not None:
+        y_lo, y_hi = int(reference_years_span[0]), int(reference_years_span[1])
+    else:
+        y_lo = y_hi = int(reference_year_default)
+    return f"""
+
+### Ano de referência operacional (chat) — aplicar salvo pedido explícito em contrário
+- **Ano operacional desta base carregada:** **{reference_year_default}** (coluna **`Ano`**). Use **`WHERE Ano = {reference_year_default}`** em totais, médias, contagens, rankings e «situação atual», **exceto** se o gestor pedir **outro ano**, **vários anos**, **todos os anos**, **histórico**, **evolução**, **ano a ano**, **linha do tempo**, **desde sempre** ou **comparar anos** — aí pode `GROUP BY Ano` ou filtrar anos pontuais conforme o texto.
+- **Anos presentes neste ficheiro:** de **{y_lo}** a **{y_hi}** (valores distintos de `Ano`).
+- **«Total de alunos» / «quantos alunos» / cadastro** (visão atual): **`SELECT COUNT(DISTINCT RA) AS total_alunos FROM dados WHERE Ano = {reference_year_default}`**. **`COUNT(*)` sem `WHERE Ano = …`** soma **linhas em todos os anos** (mesmo RA repetido) — **não** representa o total de **alunos distintos no ano atual**.
+"""
+
+
 def build_sql_user_message(
     user_question: str,
     dictionary_block: str,
     dados_columns: list[str] | None = None,
+    reference_year_default: int | None = None,
+    reference_years_span: tuple[int, int] | None = None,
 ) -> str:
     schema = ""
     if dados_columns:
         cols = ", ".join(sorted(dados_columns))
         schema = f"\n\n### Colunas disponíveis em `dados` (verificadas)\n{cols}\n"
-    return f"""{dictionary_block}{schema}
+    temporal = ""
+    if reference_year_default is not None:
+        temporal = _sql_operational_year_block(reference_year_default, reference_years_span)
+    return f"""{dictionary_block}{schema}{temporal}
 
 Pergunta do gestor:
 {user_question}
@@ -331,12 +370,17 @@ def build_sql_execution_fix_user_message(
     failed_sql: str,
     error_message: str,
     dados_columns: list[str] | None = None,
+    reference_year_default: int | None = None,
+    reference_years_span: tuple[int, int] | None = None,
 ) -> str:
     schema = ""
     if dados_columns:
         cols = ", ".join(sorted(dados_columns))
         schema = f"\n\n### Colunas disponíveis em `dados` (verificadas)\n{cols}\n"
-    return f"""{dictionary_block}{schema}
+    temporal = ""
+    if reference_year_default is not None:
+        temporal = _sql_operational_year_block(reference_year_default, reference_years_span)
+    return f"""{dictionary_block}{schema}{temporal}
 
 Pergunta original do gestor:
 {user_question}
@@ -366,7 +410,8 @@ Use **exatamente** este título:
 ### Resposta
 - **1 a 3** linhas começando com `- ` (lista Markdown). Seja **direto**: responda o que foi perguntado com o número certo.
 - Se existir **«Resumo numérico automático»**, o **primeiro** bullet deve trazer esse valor; não contradiga o bloco.
-- Se a pergunta for **quantos / quantas / contagem** e o resumo trouxer **um** total explícito (ex.: coluna `total`, `n_registos`), use **esse** número — **não** substitua por outra estimativa, arredondamento diferente ou percentagem **calculada por si** em cima de outro denominador.
+- Se a pergunta for **quantos / quantas / contagem** e o resumo trouxer **um** total explícito (ex.: coluna `total`, `n_registos`, `total_alunos`), use **esse** número — **não** substitua por outra estimativa, arredondamento diferente ou percentagem **calculada por si** em cima de outro denominador.
+- Se a pergunta for **total de alunos** / **cadastro** e o resumo indicar **um** número com contexto de **ano** (`Ano` na consulta), não o trate como «todos os anos somados» — o painel já filtra pelo **ano operacional** salvo o gestor ter pedido histórico.
 - **Proibido:** título separado só para «história da escola», missão genérica ou parágrafos longos de contexto institucional.
 - **Opcional:** no máximo **uma** frase curta de implicação prática no último bullet (sem clichês).
 

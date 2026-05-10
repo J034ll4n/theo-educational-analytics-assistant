@@ -38,6 +38,7 @@ from passos_magico.llm.sql_parse import (
     sql_guard_disallowed_tokens,
     sql_passes_quick_validation,
 )
+from passos_magico.ml.features import default_reference_year_operacional, reference_years_available
 
 
 @dataclass
@@ -78,12 +79,24 @@ def sql_and_chart_step(
 
     exec_sql = sql_executor or default_run_sql
     dados_columns: list[str] | None = None
+    ref_y: int | None = None
+    ref_span: tuple[int, int] | None = None
     if sql_context_df is not None and not sql_context_df.empty:
         dados_columns = [str(c) for c in sql_context_df.columns]
+        ref_y = default_reference_year_operacional(sql_context_df)
+        ys = reference_years_available(sql_context_df)
+        if ys:
+            ref_span = (int(ys[-1]), int(ys[0]))
 
     sys_sql = THEO_SYSTEM_BASE + "\n" + SQL_GENERATION_SYSTEM
     sys_sql_fix = sys_sql + "\n" + SQL_EXECUTION_FIX_APPEND
-    user_sql = build_sql_user_message(user_question, dictionary_block, dados_columns=dados_columns)
+    user_sql = build_sql_user_message(
+        user_question,
+        dictionary_block,
+        dados_columns=dados_columns,
+        reference_year_default=ref_y,
+        reference_years_span=ref_span,
+    )
     raw_sql = invoke_string(sys_sql, user_sql, temperature=0.05)
     sql = extract_sql_block(raw_sql)
     if not sql:
@@ -131,6 +144,8 @@ def sql_and_chart_step(
                         sql,
                         last_exec_error,
                         dados_columns=dados_columns,
+                        reference_year_default=ref_y,
+                        reference_years_span=ref_span,
                     ),
                     temperature=0.02,
                 )
@@ -159,6 +174,8 @@ def sql_and_chart_step(
                         sql,
                         last_exec_error,
                         dados_columns=dados_columns,
+                        reference_year_default=ref_y,
+                        reference_years_span=ref_span,
                     ),
                     temperature=0.02,
                 )
@@ -200,6 +217,8 @@ def sql_and_chart_step(
                         sql,
                         last_exec_error,
                         dados_columns=dados_columns,
+                        reference_year_default=ref_y,
+                        reference_years_span=ref_span,
                     ),
                     temperature=0.02,
                 )

@@ -99,6 +99,16 @@ def reference_years_available(df: pd.DataFrame) -> list[int]:
     return sorted({int(round(float(v))) for v in y.unique()}, reverse=True)
 
 
+def default_reference_year_operacional(df: pd.DataFrame | None) -> int | None:
+    """Ano padrão para SQL do chat (2024 se existir no Parquet; senão o mais recente). Alinha matriz de risco / relatório."""
+    if df is None or df.empty:
+        return None
+    ys = reference_years_available(df)
+    if not ys:
+        return None
+    return 2024 if 2024 in ys else int(ys[0])
+
+
 def default_ficha_year_synced_with_matrix(
     years_for_ra_desc: list[int],
     matrix_year_filter: int | None,

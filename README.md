@@ -27,7 +27,7 @@ Aplicação **Streamlit** com assistente **Theo** (linguagem natural → SQL sob
 
 - Disponibilizar uma interface única para explorar indicadores (INDE, IDA, IAN, IEG, IPV, etc.) e contexto do aluno (fase, turma, pedra, instituição).
 - Permitir perguntas em português ao **Theo**, que gera **SQL** sobre uma base **DuckDB** alimentada por **Parquet**, devolvendo tabelas, gráficos e narrativa.
-- Estimar **probabilidade de alto risco** com um modelo de ML alinhado ao notebook de treino, com **SHAP** e, em modo técnico, **simulação** de cenários.
+- Estimar **probabilidade de alto risco** com um modelo de ML alinhado ao notebook de treino, com **SHAP**, texto de **olhar pedagógico** (posição do INDE face à média do grupo e trajetória) e **cenários quantificados** (variações de indicadores) que entram automaticamente no **parecer do Theo** — sem simulador manual extra na interface.
 - Incorporar o **relatório anual** (apresentação Gamma) na aplicação e dar ao Theo **contexto textual** extraído do mesmo conteúdo (ficheiro Markdown em `assets/`), para respostas alinhadas ao relatório sem confundir com colunas da base.
 - Garantir **privacidade**: LLM via **Ollama** em localhost; sem envio obrigatório de dados de alunos a APIs externas.
 
@@ -68,7 +68,7 @@ notebooks/Ml/  ──►  treino (notebook)   ──►  modelo_risco_aluno.pkl
 ```
 
 - **`passos_magico/data_engine`:** resolução do caminho do Parquet, normalização de colunas (aliases RA/Nome/Ano…), execução de SQL.
-- **`passos_magico/llm`:** orquestração do assistente, prompts, deteção de perguntas “só institucionais”, geração de gráficos.
+- **`passos_magico/llm`:** orquestração do assistente, prompts, deteção de perguntas “só institucionais”, geração de gráficos, **cenários de risco** para o painel (`ml_scenarios.py`) e texto de diagnóstico (`ml_text.py`).
 - **`passos_magico/ml`:** engenharia de atributos espelhada do notebook (`risk_pipeline.py`), carregamento do modelo (`inference.py`), utilidades de UI para risco.
 - **`app/main.py`:** páginas, cache de dados e modelo, CSS global.
 
@@ -88,7 +88,7 @@ notebooks/Ml/  ──►  treino (notebook)   ──►  modelo_risco_aluno.pkl
 
 **Camada de inteligência**  
 - **Theo (LLM):** **Ollama** local + **LangChain** — gera SQL, corrige SQL em caso de erro, narra resultados, sugere perguntas; *router* para perguntas só “institucionais” (texto Gamma, sem inventar colunas na tabela `dados`).  
-- **ML:** pipeline **scikit-learn** / **XGBoost** (bundle `modelo_risco_aluno.pkl`), **SHAP**, simulação opcional “e se…”.
+- **ML:** pipeline **scikit-learn** / **XGBoost** (bundle `modelo_risco_aluno.pkl`), **SHAP**; **cenários “e se…”** são calculados em código (`passos_magico/llm/ml_scenarios.py`) e enviados ao Theo como bloco Markdown, para o texto citar percentagens coerentes com o modelo.
 
 **Camada de dados persistente**  
 - **`data/relatorio.csv`** → **ETL** (`scripts/etl.py`) → **`data/dados.parquet`** (e/ou prioridade **`notebooks/Ml/relatorio_final.parquet`** via `PASSOS_PARQUET` / `get_parquet_path()`).  
@@ -121,7 +121,7 @@ notebooks/Ml/  ──►  treino (notebook)   ──►  modelo_risco_aluno.pkl
 
 1. Carregar o **Parquet** ativo + o **bundle** do modelo.  
 2. **Engenharia de features** alinhada ao notebook (`ensure_risk_engineering`, agregações por RA / turma / instituição); na app, matriz e ficha usam o **mesmo contexto de dataset completo** onde aplicável, para **probabilidades coerentes** entre vistas.  
-3. **Duas vistas:** ficha individual (SHAP, parecer do Theo, simulação técnica) e **matriz de priorização** (filtros ano / fase / turma, exportação).  
+3. **Duas vistas:** ficha individual (**olhar pedagógico**, gráfico **SHAP** de fatores, parecer do **Theo** com cenários numéricos) e **matriz de priorização** (filtros ano / fase / turma, exportação). Não há gráfico adicional de barras INDE aluno vs média do grupo (a comparação aparece em texto no olhar pedagógico quando os dados permitem).  
 4. Limiar operacional (ex.: **46%**) é apenas **marca de UI** para leitura — não substitui decisão pedagógica ou norma da escola.
 
 ### 3.5 Diagrama lógico (Mermaid)
@@ -248,7 +248,7 @@ Configuração Ollama: **`passos_magico/llm/config.py`** (`OLLAMA_MODEL`, `OLLAM
 |--------|--------|
 | **Chat analítico** | Theo + SQL + gráficos |
 | **Relatório anual** | Site Gamma embebido por iframe; URL por defeito configurável |
-| **Previsão de risco** | Ficha individual (SHAP, Theo) e **matriz de priorização** (filtros, métricas de recorte, exportação CSV); simulação em modo técnico |
+| **Previsão de risco** | **Análise individual:** métricas da ficha, **olhar pedagógico** (INDE vs média do grupo e variação no tempo), **SHAP** (Plotly) e **Theo** (Markdown) com **cenários já calculados** pelo backend. **Matriz de priorização:** filtros, métricas de recorte, exportação CSV |
 | **Dashboards** | KPIs e gráficos (estilo claro); parecer do Theo em `data/dashboard_theo_feedback.txt`, regenerado só quando os dados mudam |
 | **Dicionário de dados** | Edição do dicionário e pré-visualização Parquet/CSV |
 
@@ -409,7 +409,7 @@ Na raiz, com o ambiente ativo:
 pytest tests/
 ```
 
-Inclui testes de SQL, catálogo de perguntas, risco, simulação e componentes do assistente.
+Inclui testes de SQL, catálogo de perguntas, risco (incluindo derivados do pipeline para cenários), parecer ML e componentes do assistente.
 
 Testes **opcionais** que chamam o Ollama local (marcador `ollama` em `pytest.ini`; fazem `skip` se o serviço não estiver disponível):
 
@@ -435,7 +435,7 @@ pytest tests/ -m ollama
 |---------|----------|
 | `app/` | Entrada Streamlit, cache |
 | `.streamlit/config.toml` | Tema **escuro** por defeito (`base = "dark"`), cores alinhadas à UI |
-| `passos_magico/` | Pacote principal (dados, LLM, ML, UI) |
+| `passos_magico/` | Pacote principal: motor de dados, LLM (Theo, prompts, cenários e parecer ML no painel de risco), ML, UI |
 | `data/` | `relatorio.csv`, `dados.parquet`; opcionalmente `dashboard_theo_feedback.txt` (parecer Theo sobre dashboards, cache) |
 | `assets/` | Ícones, slogan, contexto Markdown do relatório Gamma |
 | `notebooks/Ml/` | Notebook de ML, dados de exemplo, Parquet opcional |

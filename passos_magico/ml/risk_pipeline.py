@@ -220,6 +220,42 @@ def risk_X_matrix(df: pd.DataFrame) -> pd.DataFrame:
     return d[RISK_MODEL_COLUMNS]
 
 
+def _year_numeric_series(df: pd.DataFrame) -> pd.Series:
+    for c in ("Ano", "ano_referencia"):
+        if c in df.columns:
+            return pd.to_numeric(df[c], errors="coerce")
+    return pd.Series(np.nan, index=df.index, dtype=float)
+
+
+def risk_X_matrix_select_rows(full_df: pd.DataFrame, sub: pd.DataFrame) -> pd.DataFrame:
+    """Linhas de `risk_X_matrix(full_df)` alinhadas a cada linha de `sub` (RA + ano), na ordem de `sub`.
+
+    A engenharia (`media_turma_inde`, deltas por RA, etc.) corre sempre em **todo** `full_df`. Assim,
+    a probabilidade de um aluno na **matriz** (recorte) coincide com a **ficha individual** no mesmo ano.
+    """
+    if sub.empty:
+        return pd.DataFrame(columns=RISK_MODEL_COLUMNS)
+    X_all = risk_X_matrix(full_df)
+    ra_full = "RA" if "RA" in full_df.columns else "ra"
+    ra_sub = "RA" if "RA" in sub.columns else "ra"
+    y_full = _year_numeric_series(full_df)
+    y_sub = _year_numeric_series(sub)
+    parts: list[pd.DataFrame] = []
+    for k in range(len(sub)):
+        ra = str(sub.iloc[k][ra_sub])
+        m = full_df[ra_full].astype(str) == ra
+        yv = y_sub.iloc[k]
+        if pd.notna(yv):
+            m = m & (np.abs(y_full - float(yv)) < 0.51)
+        hit = list(full_df.index[m])
+        if not hit:
+            Xi = risk_X_matrix(sub.iloc[[k]])
+            parts.append(Xi)
+            continue
+        parts.append(X_all.loc[[hit[0]]])
+    return pd.concat(parts, axis=0)
+
+
 def row_matrix_by_ra(df: pd.DataFrame, ra: str) -> pd.DataFrame | None:
     key = "RA" if "RA" in df.columns else "ra"
     if key not in df.columns:
@@ -227,7 +263,7 @@ def row_matrix_by_ra(df: pd.DataFrame, ra: str) -> pd.DataFrame | None:
     sub = latest_single_row_for_ra(df, ra).copy()
     if sub.empty:
         return None
-    return risk_X_matrix(sub)
+    return risk_X_matrix_select_rows(df, sub)
 
 
 def row_matrix_for_ficha_feats(df: pd.DataFrame, feats: dict[str, Any]) -> pd.DataFrame | None:
@@ -248,7 +284,7 @@ def row_matrix_for_ficha_feats(df: pd.DataFrame, feats: dict[str, Any]) -> pd.Da
     sub = single_row_for_ra_and_year(df, ra, y).copy()
     if sub.empty:
         return row_matrix_by_ra(df, ra)
-    return risk_X_matrix(sub)
+    return risk_X_matrix_select_rows(df, sub)
 
 
 def _sim_delta_inde(sim: dict[str, float]) -> float | None:

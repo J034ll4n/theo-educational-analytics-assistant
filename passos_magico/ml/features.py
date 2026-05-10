@@ -99,6 +99,28 @@ def reference_years_available(df: pd.DataFrame) -> list[int]:
     return sorted({int(round(float(v))) for v in y.unique()}, reverse=True)
 
 
+def default_ficha_year_synced_with_matrix(
+    years_for_ra_desc: list[int],
+    matrix_year_filter: int | None,
+) -> int:
+    """Ano por defeito na ficha individual alinhado ao filtro «Ano de referência na lista» da matriz.
+
+    - Se a matriz tem um ano **int** e esse ano existe para o RA, usa-se esse ano (mesma linha que a matriz com 1 registo/RA).
+    - Se a matriz está em **Todos os anos** (`matrix_year_filter is None`), usa-se o **primeiro** de
+      `years_for_ra_desc` (lista já em ordem decrescente = último ano do aluno), coerente com `latest_row_per_ra_table`.
+    """
+    if not years_for_ra_desc:
+        raise ValueError("years_for_ra_desc não pode ser vazio")
+    if matrix_year_filter is not None:
+        try:
+            y = int(matrix_year_filter)
+        except (TypeError, ValueError):
+            y = None
+        if y is not None and y in years_for_ra_desc:
+            return y
+    return int(years_for_ra_desc[0])
+
+
 def years_for_ra(df: pd.DataFrame, ra: str) -> list[int]:
     """Anos disponíveis para este RA (mais recente primeiro)."""
     ra_col = "RA" if "RA" in df.columns else "ra"

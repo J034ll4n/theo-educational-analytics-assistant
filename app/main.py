@@ -62,6 +62,7 @@ from passos_magico.llm.pipeline import (
 )
 from passos_magico.ml.features import (
     FEATURE_ORDER,
+    default_ficha_year_synced_with_matrix,
     latest_row_per_ra_table,
     one_row_per_ra_for_year,
     pick_latest_year_row,
@@ -865,11 +866,20 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
 
     tab1, tab2 = st.tabs(["Análise individual", "Matriz de priorização"])
 
+    # Mesmo índice do selectbox «Ano de referência na lista» (aba Matriz): a ficha individual usa isto
+    # para o ano por defeito e evita % da matriz ≠ % da ficha (ex.: matriz em 2024 vs ficha presa em 2025).
+    _has_ref_year_pre = ("Ano" in df.columns) or ("ano_referencia" in df.columns)
+    _years_pre = reference_years_available(df) if _has_ref_year_pre else []
+    if _years_pre and "pm_rsk_tab2_ref_year" not in st.session_state:
+        st.session_state["pm_rsk_tab2_ref_year"] = 2024 if 2024 in _years_pre else int(_years_pre[0])
+
     with tab1:
         st.markdown(
             _risk_heading_html(
                 "1 · Quem analisar",
-                "Uma só lista: **escreve** para filtrar e escolhe o aluno; se houver vários anos, escolhe o **ano da ficha** abaixo (por defeito 2024 se existir).",
+                "Uma só lista: **escreve** para filtrar e escolhe o aluno. Com **vários anos**, o **ano da ficha** segue o filtro "
+                "**Ano de referência na lista** na aba Matriz (2024 por defeito se existir na base; **Todos os anos** = último ano "
+                "desse aluno, igual a «um registo por aluno» na matriz).",
                 tight_top=True,
             ),
             unsafe_allow_html=True,
@@ -909,15 +919,22 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
             elif len(_years_ra) == 1:
                 feats = row_features_from_df(df, ra, int(_years_ra[0]))
             else:
-                _def_ficha_y = 2024 if 2024 in _years_ra else int(_years_ra[0])
+                _matrix_y = st.session_state.get("pm_rsk_tab2_ref_year")
+                try:
+                    _matrix_filter = None if _matrix_y is None else int(_matrix_y)
+                except (TypeError, ValueError):
+                    _matrix_filter = None
+                _def_ficha_y = default_ficha_year_synced_with_matrix(_years_ra, _matrix_filter)
                 _y_idx = _years_ra.index(_def_ficha_y)
+                _ficha_year_key_suffix = "all" if _matrix_filter is None else str(int(_matrix_filter))
                 _sel_ficha_y = st.selectbox(
                     "Ano da ficha",
                     options=_years_ra,
                     index=_y_idx,
                     format_func=lambda y: str(int(y)),
-                    key=f"pm_rsk_ficha_year_{ra}",
-                    help="Risco, SHAP e Theo usam os dados **deste** ano. Por defeito: **2024** se existir, senão o mais recente.",
+                    key=f"pm_rsk_ficha_year_{ra}_{_ficha_year_key_suffix}",
+                    help="Risco, SHAP e Theo usam os dados **deste** ano. Por defeito: **igual** ao «Ano de referência na lista» na "
+                    "aba Matriz; se lá estiver **Todos os anos**, usa-se o **último ano** deste RA (alinha com a matriz).",
                 )
                 feats = row_features_from_df(df, ra, int(_sel_ficha_y))
 
@@ -945,8 +962,8 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
                 help=f"Na base: {int(feats['Turma_ord'])} (1=A … 5=E).",
             )
             st.caption(
-                f"Risco e SHAP usam o registo de **{int(feats['Ano'])}**. Na matriz, escolhe o **mesmo ano** em «Ano de referência na lista» "
-                "e **um registo por aluno** para alinhar a percentagem."
+                f"Risco e SHAP usam o registo de **{int(feats['Ano'])}**. O ano da ficha **segue por defeito** o filtro da matriz "
+                "(«Ano de referência na lista»); com **Todos os anos** na matriz, este valor corresponde ao **último ano** deste RA."
             )
             _rc = risk_color(proba)
             _bg, _bd = _risk_ficha_panel_rgba(proba)
@@ -1411,7 +1428,7 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
             st.markdown(
                 f"- Aqui a gente usa **{OPERATIONAL_HIGH_RISK_THRESHOLD:.0%}** como marca de **alto risco** na interface — foi assim que o modelo foi calibrado pra operar no dia a dia.\n"
                 "- Isso **ajuda** na triagem, mas **não troca** regra da escola, ata de CIEP, lista oficial nem o que a equipe já sabe do aluno na prática.\n"
-                "- **Ano de referência na lista:** por defeito **2024** (se existir na base); **Todos os anos** volta ao recorte sem filtro de ano. Com um ano fixo + **um registo por aluno**, a percentagem **bate com a ficha** da outra aba se escolheres o **mesmo ano** lá.\n"
+                "- **Ano de referência na lista:** por defeito **2024** (se existir na base); **Todos os anos** volta ao recorte sem filtro de ano. Com um ano fixo + **um registo por aluno**, a percentagem **bate com a ficha** da outra aba (a ficha **sincroniza** o ano por defeito com este filtro).\n"
                 "- Com **«Todos os registos do recorte»** (checkbox desligado) e ano **Todos**, vês todas as linhas; o mesmo RA pode ter riscos diferentes por ano.\n"
                 "- Com **«Um registo por aluno»** ligado e ano **Todos**, usa-se o **último ano global** por RA e depois fase/turma.\n"
                 "- A ordem vem **só do modelo** em cima do Parquet que tá aberto — não é documento de encaminhamento nem decisão automática."
@@ -1439,7 +1456,8 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
                     index=_def_y_idx,
                     format_func=lambda x: "Todos os anos" if x is None else str(int(x)),
                     key="pm_rsk_tab2_ref_year",
-                    help="**2024** (se existir) como vista operacional; **Todos** não filtra por ano. Para bater com a ficha: o **mesmo** ano na outra aba + um registo por aluno.",
+                    help="**2024** (se existir) como vista operacional; **Todos** não filtra por ano. A **Análise individual** usa o mesmo "
+                    "ano por defeito na ficha (e, em **Todos**, o último ano por aluno — igual a um registo por aluno aqui).",
                 )
             else:
                 sel_ref_year = None
@@ -1510,7 +1528,7 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
 
             mask = ranking_mask(_df_basis, f_sel, str(t_sel))
             _slice_df = _df_basis.loc[mask].copy()
-            full_ranked = predict_risk_slice(bundle, _slice_df)
+            full_ranked = predict_risk_slice(bundle, _slice_df, full_df=df)
             n_recorte = len(full_ranked)
             if full_ranked.empty:
                 if sel_ref_year is not None:

@@ -16,6 +16,7 @@ from passos_magico.ml.risk_pipeline import (
     build_X_after_slider_simulation,
     is_sklearn_risk_pipeline,
     risk_X_matrix,
+    risk_X_matrix_select_rows,
     row_matrix_for_ficha_feats,
 )
 
@@ -104,8 +105,13 @@ def ensure_risco_column(df: pd.DataFrame, bundle: Any | None) -> pd.DataFrame:
         return df
 
 
-def predict_risk_slice(bundle: Any, sub: pd.DataFrame) -> pd.DataFrame:
-    """Probabilidade de risco por linha de `sub` (já recortado), na ordem do modelo; ordena do maior para o menor."""
+def predict_risk_slice(bundle: Any, sub: pd.DataFrame, full_df: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Probabilidade de risco por linha de `sub` (já recortado), na ordem do modelo; ordena do maior para o menor.
+
+    Com pipeline sklearn, passe **`full_df`** = base completa carregada na app: a engenharia de features
+    (média da turma, deltas temporais, etc.) fica igual à ficha individual. Sem `full_df`, mantém-se o
+    comportamento antigo (só o recorte), útil para testes mínimos.
+    """
     if sub.empty:
         return pd.DataFrame(columns=["RA", "Nome", "Fase", "Turma", "Ano", "risco"])
     sub = sub.copy()
@@ -115,7 +121,10 @@ def predict_risk_slice(bundle: Any, sub: pd.DataFrame) -> pd.DataFrame:
     t_col = "Turma" if "Turma" in sub.columns else "turma"
     ano_col = "Ano" if "Ano" in sub.columns else "ano_referencia"
     if is_sklearn_risk_pipeline(bundle):
-        X = risk_X_matrix(sub)
+        if full_df is not None:
+            X = risk_X_matrix_select_rows(full_df, sub)
+        else:
+            X = risk_X_matrix(sub)
         prob = bundle.predict_proba(X)[:, 1]
     else:
         clf = _get_clf(bundle)
@@ -136,7 +145,7 @@ def predict_risk_slice(bundle: Any, sub: pd.DataFrame) -> pd.DataFrame:
 
 
 def predict_risk_batch(bundle: Any, df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
-    return predict_risk_slice(bundle, df.loc[mask].copy())
+    return predict_risk_slice(bundle, df.loc[mask].copy(), full_df=df)
 
 
 def explain_row_shap(bundle: Any, feats: dict[str, float], df: pd.DataFrame | None = None) -> list[tuple[str, float]]:

@@ -6,8 +6,9 @@ import re
 
 # Perguntas que pedem narrativa do relatório/resumo (inclui menções a "pdf" por hábito do usuário)
 _NARRATIVE_PATTERNS = (
-    r"\bfeedback\b.*\b(relat[oó]rio\s+anual|gamma|resumo\s+anual|pede)\b",
-    r"\b(relat[oó]rio\s+anual|gamma|resumo\s+anual)\b.*\bfeedback\b",
+    # «feedback» / «feedbacks» (plural) + relatório (qualquer ordem)
+    r"\bfeedbacks?\b.*\b(relat[oó]rio\s+anual|gamma|resumo\s+anual|pede)\b",
+    r"\b(relat[oó]rio\s+anual|gamma|resumo\s+anual|pede)\b.*\bfeedbacks?\b",
     r"\b(parecer|opini[aã]o|avalia[cç][aã]o|impress[aã]o|cr[ií]tica)\b.*\b(relat[oó]rio\s+anual|gamma|resumo\s+anual|pede)\b",
     r"\bs[ií]ntese\s+institucional\b",
     r"\b(narrativa|storytelling)\b.*\b(relat[oó]rio\s+anual|gamma|resumo\s+anual|pede)\b",

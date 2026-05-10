@@ -19,6 +19,7 @@ SQL_GENERATION_SYSTEM = """Você gera exclusivamente uma consulta SQL DuckDB vá
 - `EXTRACT(YEAR FROM varchar)` sem converter a coluna para data antes.
 - Operadores Unicode `≥` / `≤` no SQL — use apenas `>=` e `<=` em ASCII.
 - Nomes de colunas inventados (`year`, `tipo`, `pede`, `pdf`, `feedback`, `comentario`, `avaliacao`, etc.) — use só colunas do dicionário (`Ano`, `Fase`, …). **Não existe** coluna de texto livre tipo `feedback` na tabela **dados**; pedidos de opinião/parecer sobre relatório institucional **não** se resolvem com SQL.
+- Perguntas só sobre **feedbacks / opinião / narrativa** do relatório anual ou Gamma (sem pedir números da base nem «liste todos os alunos»): **não** faça `SELECT RA, Nome, …` em massa — não há «feedback por aluno» na tabela; isso só polui o painel. Use agregação (`COUNT`, `AVG` por Fase/Turma) **só** se o gestor pedir métrica explícita.
 
 Regras:
 - A tabela chama-se **dados** (uma view sobre um arquivo Parquet).

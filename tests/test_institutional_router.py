@@ -24,6 +24,18 @@ def test_feedback_sobre_relatorio_anual_is_narrative_only() -> None:
     )
 
 
+def test_feedbacks_plural_relatorio_anual_ordem_natural() -> None:
+    """«feedbacks» (plural) + relatório antes ou depois — deve ir ao texto institucional, não SQL com todos os RA."""
+    assert is_institutional_narrative_only(
+        "com base no nosso relatório anual, quais feedbacks você pode me trazer?",
+        _CTX,
+    )
+    assert is_institutional_narrative_only(
+        "quais feedbacks você traz com base no relatório anual?",
+        _CTX_GAMMA,
+    )
+
+
 def test_quantos_still_uses_sql_not_narrative_only() -> None:
     assert not is_institutional_narrative_only(
         "quantos alunos aparecem no resumo anual em números?",

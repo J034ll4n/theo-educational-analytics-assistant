@@ -170,6 +170,16 @@ class TestChartKpiHeuristic(unittest.TestCase):
         _fig, kind = figure_from_dataframe(df, "auto")
         self.assertEqual(kind, "barras")
 
+    def test_many_rows_ra_axis_skips_bar_chart(self):
+        df = pd.DataFrame({"RA": [f"RA-{i}" for i in range(50)], "INDE": range(50)})
+        _fig, kind = figure_from_dataframe(df, "auto")
+        self.assertEqual(kind, "kpi")
+
+    def test_few_rows_ra_axis_keeps_bar_chart(self):
+        df = pd.DataFrame({"RA": [f"RA-{i}" for i in range(5)], "INDE": [7.0, 7.1, 7.2, 7.3, 7.4]})
+        _fig, kind = figure_from_dataframe(df, "auto")
+        self.assertEqual(kind, "barras")
+
 
 class TestInsightResponseMode(unittest.TestCase):
     def test_kpi_from_chart_kind(self):

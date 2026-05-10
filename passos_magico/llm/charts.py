@@ -83,6 +83,22 @@ def _column_groups(df: pd.DataFrame) -> tuple[list[str], list[str]]:
     return num_cols, cat_cols
 
 
+# Gráficos com um RA/Nome por barra ou ponto degradam com milhares de linhas e expõem identificadores sem agregar.
+_MAX_ROWS_PER_STUDENT_AXIS_CHART = 32
+
+
+def _axis_is_per_student_identifier(col: str) -> bool:
+    return str(col).strip().lower() in ("ra", "nome")
+
+
+def _too_many_rows_for_student_axis_chart(df: pd.DataFrame, axis_col: str | None) -> bool:
+    if axis_col is None or df.empty:
+        return False
+    if not _axis_is_per_student_identifier(axis_col):
+        return False
+    return len(df) > _MAX_ROWS_PER_STUDENT_AXIS_CHART
+
+
 def _prioritize_ano_numeric_first(num_cols: list[str]) -> list[str]:
     """Se existir coluna de ano letivo, usa-a como 1.ª numérica (eixo X em linhas com LAG + médias)."""
     for key in ("Ano", "ano"):
@@ -148,6 +164,14 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
             return _empty_fig(msg), "kpi"
         # Barras (categoria + valor) primeiro: comparações público/particular, turmas, etc.
         if len(cat_cols) >= 1 and len(num_cols) >= 1:
+            if _too_many_rows_for_student_axis_chart(d, cat_cols[0]):
+                return (
+                    _empty_fig(
+                        "Muitos alunos neste resultado — gráfico por RA ou Nome não ajuda a leitura. "
+                        "Peça uma agregação (fase, turma, ano, rede) ou use a tabela abaixo."
+                    ),
+                    "kpi",
+                )
             fig = px.bar(
                 d.head(100),
                 x=cat_cols[0],
@@ -199,6 +223,13 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                 )
                 _apply_calendar_year_axis(fig, x_col=num_cols[0])
             elif len(cat_cols) >= 1 and len(num_cols) >= 1:
+                if _too_many_rows_for_student_axis_chart(d, cat_cols[0]):
+                    return (
+                        _empty_fig(
+                            "Muitos alunos — série por RA/Nome não é adequada. Agregue por fase, turma ou ano."
+                        ),
+                        "kpi",
+                    )
                 fig = px.line(
                     d.sort_values(cat_cols[0]),
                     x=cat_cols[0],
@@ -216,6 +247,13 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
 
         if chart_id == "barras_v":
             if len(cat_cols) >= 1 and len(num_cols) >= 1:
+                if _too_many_rows_for_student_axis_chart(d, cat_cols[0]):
+                    return (
+                        _empty_fig(
+                            "Muitos alunos — evite barras por RA/Nome; agregue ou use a tabela."
+                        ),
+                        "kpi",
+                    )
                 fig = px.bar(
                     d.head(200),
                     x=cat_cols[0],
@@ -236,6 +274,13 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
 
         if chart_id == "barras_h":
             if len(cat_cols) >= 1 and len(num_cols) >= 1:
+                if _too_many_rows_for_student_axis_chart(d, cat_cols[0]):
+                    return (
+                        _empty_fig(
+                            "Muitos alunos — evite barras por RA/Nome; agregue ou use a tabela."
+                        ),
+                        "kpi",
+                    )
                 fig = px.bar(
                     d.head(200),
                     x=num_cols[0],
@@ -258,6 +303,13 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                 fig = px.scatter(d, x=num_cols[0], y=num_cols[1], template="plotly_dark")
                 _apply_calendar_year_axis(fig, x_col=num_cols[0])
             elif len(cat_cols) >= 1 and len(num_cols) >= 1:
+                if _too_many_rows_for_student_axis_chart(d, cat_cols[0]):
+                    return (
+                        _empty_fig(
+                            "Muitos alunos — dispersão por RA/Nome não é útil; agregue ou filtre."
+                        ),
+                        "kpi",
+                    )
                 fig = px.scatter(d, x=cat_cols[0], y=num_cols[0], template="plotly_dark")
                 _apply_calendar_year_axis(fig, x_col=cat_cols[0])
             else:
@@ -270,6 +322,13 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
                 fig = px.area(tmp, x=num_cols[0], y=num_cols[1], template="plotly_dark")
                 _apply_calendar_year_axis(fig, x_col=num_cols[0])
             elif len(cat_cols) >= 1 and len(num_cols) >= 1:
+                if _too_many_rows_for_student_axis_chart(d, cat_cols[0]):
+                    return (
+                        _empty_fig(
+                            "Muitos alunos — área por RA/Nome não é adequada; agregue ou use a tabela."
+                        ),
+                        "kpi",
+                    )
                 tmp = d.sort_values(cat_cols[0])
                 fig = px.area(tmp, x=cat_cols[0], y=num_cols[0], template="plotly_dark")
                 _apply_calendar_year_axis(fig, x_col=cat_cols[0])
@@ -295,6 +354,13 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
         if chart_id == "pizza":
             if len(cat_cols) >= 1 and len(num_cols) >= 1:
                 pie_df = d.groupby(cat_cols[0], as_index=False)[num_cols[0]].sum()
+                if _too_many_rows_for_student_axis_chart(pie_df, cat_cols[0]):
+                    return (
+                        _empty_fig(
+                            "Muitos alunos — pizza por RA/Nome não é legível; agregue por outra dimensão."
+                        ),
+                        "kpi",
+                    )
                 fig = px.pie(pie_df, names=cat_cols[0], values=num_cols[0], template="plotly_dark")
             elif len(cat_cols) >= 1:
                 vc = d[cat_cols[0]].astype(str).value_counts().head(20)
@@ -305,6 +371,13 @@ def figure_from_dataframe(df: pd.DataFrame, chart_id: str) -> tuple[go.Figure, s
 
         if chart_id == "box":
             if len(cat_cols) >= 1 and len(num_cols) >= 1:
+                if _too_many_rows_for_student_axis_chart(d, cat_cols[0]):
+                    return (
+                        _empty_fig(
+                            "Muitos alunos — boxplot por RA/Nome não é útil; agregue (ex.: por turma)."
+                        ),
+                        "kpi",
+                    )
                 fig = px.box(d, x=cat_cols[0], y=num_cols[0], template="plotly_dark")
                 _apply_calendar_year_axis(fig, x_col=cat_cols[0])
             elif len(num_cols) >= 1:

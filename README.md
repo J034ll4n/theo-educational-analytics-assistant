@@ -1,10 +1,25 @@
 # Passos Mágicos — Painel analítico e assistente Theo
 
-**Made by Joe Allan Zirn**
+**Autor:** Joe Allan Zirn · **Contexto:** projeto académico (Postech FIAP · Fase 5) — dados educacionais para apoio à decisão pedagógica.
 
-**Disciplina / contexto:** projeto académico (Postech FIAP · Fase 5) — transformação de dados educacionais em decisões de apoio pedagógico.
+Aplicação **Streamlit** com assistente **Theo** (linguagem natural → SQL sobre **DuckDB**/**Parquet**), **dashboards**, **risco escolar** (ML com **SHAP**), **dicionário de dados editável** e **relatório institucional** integrado. Dados e inferência podem permanecer no equipamento local.
 
-Este repositório consolida o trabalho desenvolvido: uma **aplicação local em Streamlit** que integra **consulta analítica em linguagem natural** (LLM + SQL sobre dados tabulares), **dashboards**, **previsão de risco escolar com machine learning** (incluindo explicabilidade SHAP), **dicionário de dados editável** e **visualização do relatório institucional** publicado na web. Toda a inferência e os dados sensíveis podem permanecer na máquina do utilizador.
+## Índice
+
+- [1. Objetivos do projeto](#1-objetivos-do-projeto)
+- [2. Stack tecnológica](#2-stack-tecnológica)
+- [3. Arquitetura](#3-arquitetura-visão-geral)
+- [4. Dados e pipeline](#4-dados-e-pipeline)
+- [5. Modelo de machine learning](#5-modelo-de-machine-learning-risco-do-aluno)
+- [6. Assistente Theo](#6-assistente-theo-chat-analítico)
+- [7. Páginas da aplicação](#7-páginas-da-aplicação-streamlit)
+- [8. Pré-requisitos](#8-pré-requisitos)
+- [9. Instalação e execução](#9-instalação-e-execução)
+- [10. Configuração, secrets e deploy](#10-configuração-secrets-e-deploy)
+- [11. Testes automatizados](#11-testes-automatizados)
+- [12. Privacidade e ética de dados](#12-privacidade-e-ética-de-dados)
+- [13. Estrutura de pastas](#13-estrutura-de-pastas-resumo)
+- [14. Referências](#14-referências-e-continuidade-do-trabalho)
 
 ---
 
@@ -19,7 +34,7 @@ Este repositório consolida o trabalho desenvolvido: uma **aplicação local em 
 ### 1.1 Expectativas sobre o modelo e o assistente (leia antes da demo)
 
 - **Risco (ML):** a probabilidade na interface é uma **estimativa estatística** treinada em dados históricos. **Não** substitui parecer pedagógico, CIEP, regras da escola nem visita à sala. Os limiares (ex.: 46%) são **marcas operacionais** para leitura na app, não verdades absolutas sobre uma criança.
-- **Theo (LLM):** pode **alucinar** ou gerar SQL incorrecto; as respostas devem ser **verificadas** (tabela devolvida, ordens de grandeza). Perguntas “institucionais” usam texto de contexto (Gamma/resumo), não a base linha-a-linha.
+- **Theo (LLM):** pode **alucinar** ou gerar SQL **incorreto**; as respostas devem ser **verificadas** (tabela devolvida, ordens de grandeza). Perguntas “institucionais” usam texto de contexto (Gamma/resumo), não a base linha a linha.
 - **MVP em nuvem:** dashboards e risco podem funcionar **sem** Ollama; o chat Theo e o parecer automático dos dashboards dependem de **Ollama + LangChain** quando quiser LLM local ou cache pré-gerado.
 
 ---
@@ -34,7 +49,7 @@ Este repositório consolida o trabalho desenvolvido: uma **aplicação local em 
 | Gráficos | [Plotly](https://plotly.com/python/) |
 | LLM | [Ollama](https://ollama.com/) + [LangChain](https://python.langchain.com/) (comunidade) |
 | ML | [scikit-learn](https://scikit-learn.org/), [imbalanced-learn](https://imbalanced-learn.org/) (SMOTE), [XGBoost](https://xgboost.readthedocs.io/), [SHAP](https://shap.readthedocs.io/) |
-| Empacotamento | `venv`, `requirements.txt`, `run.bat` (Windows) |
+| Empacotamento | `venv`, `requirements.txt`, `run.bat` (Windows), `run.sh` (Linux/macOS), tarefa de build em `.vscode/tasks.json` |
 
 ---
 
@@ -56,6 +71,85 @@ notebooks/Ml/  ──►  treino (notebook)   ──►  modelo_risco_aluno.pkl
 - **`passos_magico/llm`:** orquestração do assistente, prompts, deteção de perguntas “só institucionais”, geração de gráficos.
 - **`passos_magico/ml`:** engenharia de atributos espelhada do notebook (`risk_pipeline.py`), carregamento do modelo (`inference.py`), utilidades de UI para risco.
 - **`app/main.py`:** páginas, cache de dados e modelo, CSS global.
+
+### 3.1 Visão em camadas (de cima para baixo)
+
+**Camada de experiência (UI)**  
+- Aplicação **Streamlit** (`app/main.py`): menu lateral (**Chat analítico**, **Relatório anual**, **Previsão de risco**, **Dashboards**, **Dicionário de dados**), tema escuro em `.streamlit/config.toml`.  
+- O utilizador **não** escreve SQL; interage em **português**.
+
+**Camada de orquestração (`app/` + pacote)**  
+- **`app/`:** entrada, CSS global, **`cached`** (dados e modelo em cache de sessão).  
+- **`passos_magico/`:** núcleo do produto — motor de dados, LLM, ML, UI dos dashboards, fusão semântica (dicionário + dados).
+
+**Camada analítica**  
+- **DuckDB** sobre ficheiro **Parquet** (view lógica **`dados`**): o SQL gerado pelo assistente executa-se aqui.  
+- **Plotly** para gráficos no chat e nos ecrãs de risco.
+
+**Camada de inteligência**  
+- **Theo (LLM):** **Ollama** local + **LangChain** — gera SQL, corrige SQL em caso de erro, narra resultados, sugere perguntas; *router* para perguntas só “institucionais” (texto Gamma, sem inventar colunas na tabela `dados`).  
+- **ML:** pipeline **scikit-learn** / **XGBoost** (bundle `modelo_risco_aluno.pkl`), **SHAP**, simulação opcional “e se…”.
+
+**Camada de dados persistente**  
+- **`data/relatorio.csv`** → **ETL** (`scripts/etl.py`) → **`data/dados.parquet`** (e/ou prioridade **`notebooks/Ml/relatorio_final.parquet`** via `PASSOS_PARQUET` / `get_parquet_path()`).  
+- **`dicionario.json`:** descrições por coluna que alimentam os prompts do Theo.
+
+**Camada de contexto institucional (não tabular)**  
+- Markdown em **`assets/`** (ex.: relatório Gamma), resumos anuais — texto para o Theo **sem** ser confundido com o esquema SQL da base.
+
+### 3.2 Fluxo de dados
+
+1. **Origem:** CSV de relatório (`data/relatorio.csv`) ou Parquet já preparado.  
+2. **ETL:** normalização, sentinélas, opcionalmente coluna **`risco`** se existir `modelo_risco_aluno.pkl`.  
+3. **Armazenamento analítico:** Parquet (formato colunar).  
+4. **Consumo:** DuckDB lê o Parquet; o Streamlit recebe resultados em **pandas** (`DataFrame`).  
+5. **Saída:** tabelas, gráficos, métricas e exportação CSV (por exemplo, matriz de priorização de risco).
+
+*Diagrama sugerido:* pipeline horizontal com as cinco etapas acima e setas sequenciais.
+
+### 3.3 Fluxo do Chat analítico (Theo)
+
+1. Pergunta em linguagem natural, bloco de **dicionário**, lista de **colunas verificadas** e regras de **ano operacional** (prompts).  
+2. O **LLM** gera um `SELECT` DuckDB sobre **`dados`**.  
+3. **Validação e correção** em ciclo curto se o SQL falhar.  
+4. **Execução** → `DataFrame` → heurística de gráfico (**Plotly**) e narrativa em modo **KPI** ou **analítico**.  
+5. Resposta em **Markdown**, com números alinhados à tabela (regras anti-alucinação nos prompts).
+
+*Diagrama sugerido:* **Pergunta → SQL → DuckDB → Tabela ou gráfico → Narrativa**, com ramo **Ollama (local)** para geração de SQL e texto.
+
+### 3.4 Fluxo de risco (ML)
+
+1. Carregar o **Parquet** ativo + o **bundle** do modelo.  
+2. **Engenharia de features** alinhada ao notebook (`ensure_risk_engineering`, agregações por RA / turma / instituição); na app, matriz e ficha usam o **mesmo contexto de dataset completo** onde aplicável, para **probabilidades coerentes** entre vistas.  
+3. **Duas vistas:** ficha individual (SHAP, parecer do Theo, simulação técnica) e **matriz de priorização** (filtros ano / fase / turma, exportação).  
+4. Limiar operacional (ex.: **46%**) é apenas **marca de UI** para leitura — não substitui decisão pedagógica ou norma da escola.
+
+### 3.5 Diagrama lógico (Mermaid)
+
+O diagrama seguinte é interpretado pelo GitHub na visualização do ficheiro.
+
+```mermaid
+flowchart LR
+  subgraph dados["Dados"]
+    CSV[(relatorio.csv)]
+    ETL[ETL]
+    PQ[(Parquet)]
+  end
+  CSV --> ETL --> PQ
+  PQ --> DDB[(DuckDB dados)]
+  DDB --> DF[DataFrames Pandas]
+  subgraph ui[Streamlit]
+    CHAT[Chat Theo]
+    RISK[Risco SHAP]
+    DASH[Dashboards]
+  end
+  DF --> CHAT
+  DF --> RISK
+  DF --> DASH
+  OLL[Ollama] --> CHAT
+  LLM[LangChain] --> CHAT
+  PKL[(modelo .pkl)] --> RISK
+```
 
 ---
 
@@ -129,21 +223,15 @@ Os **números exatos** dependem do CSV, da semente e do *split*; devem ser **cop
 - **`passos_magico/ml/risk_pipeline.py`** — replica a engenharia de atributos quando os dados vêm do Parquet (incluindo variantes de grafia em “Pedra”, idade a partir de datas, etc.).
 - **`passos_magico/ml/inference.py`** — carrega o `.pkl`, `predict_proba`, predição em lote, SHAP quando aplicável.
 
-### Parquet, coluna `risco` e o Theo (confirmação)
+### Alinhamento entre Parquet, coluna `risco` e o Theo
 
-**Sim:** os dados que o Theo consulta em SQL são **o mesmo conjunto tabular** carregado a partir do **Parquet** (função `load_dados_df` → DataFrame em memória). Esse DataFrame é exposto ao motor **DuckDB** como tabela **`dados`**, e o Theo gera `SELECT` sobre essa tabela.
-
-Fluxo resumido:
-
-1. O Parquet é lido na arranque da app (caminho definido em `get_parquet_path()` — ver secção 4).
-2. Ao preparar o *runner* do chat (`app/cached.py` → `make_chat_sql_runner`), o sistema garante a coluna **`risco`**: se já existir no ficheiro (por exemplo após o `etl.py` ter corrido com o modelo presente), usa-se; caso contrário, **`ensure_risco_column`** calcula `risco` com **`predict_risk_probabilities`** sobre esse mesmo DataFrame.
-3. O Theo, nas perguntas quantitativas, executa SQL **apenas de leitura** sobre esse DataFrame — portanto pode filtrar, ordenar e agregar por **`risco`**, INDE, Fase, etc., **em cima dos mesmos dados** (mais o dicionário e textos institucionais como contexto da LLM).
-
-Ou seja: **não** há uma segunda base “só para o modelo” e outra “só para o Theo”; o modelo alimenta a coluna de risco e o **Theo interroga a visão tabular unificada** (`dados`) que inclui essa coluna quando disponível.
+O SQL do Theo incide sobre a **mesma** vista tabular **`dados`** (DuckDB em cima do `DataFrame` carregado do Parquet; ver §4 e `get_parquet_path()`). A coluna **`risco`** é preenchida no Parquet pelo ETL quando o modelo existe, ou calculada em memória por `ensure_risco_column` / `predict_risk_probabilities` ao preparar o *runner* do chat (`app/cached.py`). Não existe uma base paralela “só para o modelo”: o modelo **enriquece** a tabela que o assistente consulta.
 
 ---
 
 ## 6. Assistente Theo (chat analítico)
+
+Fluxo resumido: ver **§3.3**. Em seguida, o comportamento operacional e os ficheiros de contexto.
 
 - O utilizador formula perguntas em linguagem natural.
 - O sistema constrói contexto a partir do **dicionário**, opcionalmente **`resumo_anual.txt`**, e do texto do relatório Gamma em **`assets/relatorio_gamma_context.md`** (ou override **`.passos_gamma_context.txt`** na raiz, ignorado pelo Git se configurado).
@@ -174,10 +262,10 @@ Configuração Ollama: **`passos_magico/llm/config.py`** (`OLLAMA_MODEL`, `OLLAM
 
 ## 8. Pré-requisitos
 
-1. **Windows** (o arranque documentado usa `run.bat`; em Linux/macOS adapte os comandos).
-2. **Python 3.10+** (`py` ou `python` no PATH).
-3. **Ollama** — ver secção **8.1** (instalação + modelo + teste).
-4. Ficheiro **`data/relatorio.csv`** presente (o repositório pode incluir um exemplo para desenvolvimento).
+1. **Sistema operativo:** Windows (`run.bat`), Linux ou macOS (`run.sh`); em alternativa, comandos manuais equivalentes (§9).
+2. **Python 3.10 ou superior** (`py`, `python3` ou `python` no PATH).
+3. **Ollama** (opcional mas necessário para o chat Theo e pareceres LLM) — ver **§8.1**.
+4. **`data/relatorio.csv`** para ETL completo; se ausente, o ETL pode gerar um CSV de exemplo (`scripts/etl.py`).
 
 ### 8.1 Ollama: do download ao teste com o **mesmo modelo** da app
 
@@ -199,7 +287,7 @@ O código usa por defeito o modelo **`llama3`** no endpoint local (`passos_magic
    ```
 
    Se responder, o motor está OK.
-5. **Alinhar com a app:** com o mesmo nome em `OLLAMA_MODEL` (ou `llama3` por defeito), arranca o Streamlit (secção 9). Na página **Chat analítico**, faz uma pergunta simples (ex.: *«Quantos registos existem na base no total?»* — ver `data/theo_20_smoke_perguntas.txt` para uma lista de 20 smoke tests).
+5. **Alinhar com a app:** com o mesmo nome em `OLLAMA_MODEL` (ou `llama3` por defeito), arrancar o Streamlit (**§9**). Na página **Chat analítico**, testar com uma pergunta simples (ex.: *«Quantos registos existem na base no total?»*); lista de *smoke tests:* `data/theo_20_smoke_perguntas.txt`.
 6. **Timeouts:** pedidos longos podem estourar o tempo máximo; aumenta **`OLLAMA_REQUEST_TIMEOUT`** (segundos) se o PC for mais lento.
 
 **Testes automáticos com Ollama** (opcional, requer LangChain + Ollama a correr):
@@ -210,31 +298,42 @@ pytest tests/test_theo_e2e_optional.py -m ollama -v
 
 ---
 
-## 9. Como executar
+## 9. Instalação e execução
 
-### Início rápido depois de clonar (instala tudo e abre a app)
+### Arranque automático (recomendado)
 
-- **Windows:** duplo clique em **`run.bat`** na raiz do repositório (ou abre a pasta no **Cursor / VS Code** e usa **Run Build Task**: `Ctrl+Shift+B` — tarefa predefinida **«Instalar dependências e executar app»**).
-- **Linux / macOS:** na raiz, `chmod +x run.sh` (uma vez) e `./run.sh` — ou no Cursor/VS Code o mesmo **`Ctrl+Shift+B`** se a tarefa de build estiver disponível.
+| Plataforma | Ação |
+|------------|------|
+| **Windows** | Duplo clique em **`run.bat`** na raiz do repositório. |
+| **Linux / macOS** | Na raiz: `chmod +x run.sh` (uma vez) e `./run.sh`. |
+| **Cursor / VS Code** | Abrir a pasta do repositório e **Run Build Task** (`Ctrl+Shift+B`): tarefa **«Instalar dependências e executar app (Streamlit)»** (`.vscode/tasks.json`). |
 
-O script cria **`.venv`**, corre **`pip install -r requirements.txt`**, gera **`data/dados.parquet`** com o ETL se faltar, e inicia o **Streamlit**. Não precisa de instalar pacotes na mão antes do primeiro run.
+O script cria **`.venv`**, executa **`pip install -r requirements.txt`**, corre o **ETL** se faltar `data/dados.parquet` (ou atualiza `risco` se existir `modelo_risco_aluno.pkl`), define **`PYTHONPATH`** na raiz e inicia o **Streamlit** (tema escuro em `.streamlit/config.toml`).
 
-1. Clonar ou copiar o projeto e abrir a pasta na raiz do repositório (no IDE, abrir a pasta que contém `run.bat` / `run.sh`).
-2. Colocar ou atualizar **`data/relatorio.csv`** (se não existir, o ETL pode gerar um CSV de exemplo — ver `scripts/etl.py`).
-3. Garantir **`modelo_risco_aluno.pkl`** na raiz (treinar pelo notebook se necessário).
-4. **Executar** conforme o bloco **Início rápido** acima **ou**, manualmente (o ficheiro **`.streamlit/config.toml`** fixa o **tema escuro** por defeito no Streamlit):
+### Checklist antes do primeiro arranque
 
-   ```bat
-   py -3 -m venv .venv
-   .venv\Scripts\activate
-   pip install -r requirements.txt
-   python scripts\etl.py
-   python -m streamlit run app\main.py
-   ```
+1. Clonar o repositório e abrir a **raiz** no explorador de ficheiros ou no IDE.  
+2. Dispor de **`data/relatorio.csv`** (ou aceitar o CSV de exemplo gerado pelo ETL).  
+3. Colocar **`modelo_risco_aluno.pkl`** na raiz quando for usar **previsão de risco** ou coluna `risco` no ETL (treino: `notebooks/Ml/ML_Passos_Magicos.ipynb`).
 
-O `run.bat` cria o `.venv`, instala dependências, corre o ETL se faltar `data\dados.parquet` e, se o Parquet já existir e houver **`modelo_risco_aluno.pkl`** na raiz, volta a correr o ETL para atualizar a coluna **`risco`**. Depois inicia o Streamlit com `PYTHONPATH` na raiz do projeto.
+### Instalação manual (referência)
 
-Atalho com ícone: na raiz existe **`Passos Mágicos.lnk`** (criado via script PowerShell referenciado no `run.bat`, se aplicável no teu ambiente).
+Windows (PowerShell ou `cmd`, na raiz):
+
+```bat
+py -3 -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python scripts\etl.py
+set PYTHONPATH=%CD%
+python -m streamlit run app\main.py
+```
+
+Linux / macOS: ativar `.venv/bin/activate`, depois os mesmos passos com `python3` ou `python` conforme o sistema.
+
+O **`run.bat`** replica estes passos e volta a correr o ETL quando já existe `dados.parquet` e há **`modelo_risco_aluno.pkl`**, para atualizar a coluna **`risco`**.
+
+**Atalho Windows:** pode existir **`Passos Mágicos.lnk`** na raiz (gerado por script PowerShell referenciado no `run.bat`, conforme o ambiente).
 
 ### Notebook de ML (`notebooks/Ml/ML_Passos_Magicos.ipynb`)
 
@@ -257,49 +356,48 @@ Se ao correr a primeira célula aparecer **`No module named 'numpy'`** (ou `pand
 
 ---
 
-## 10. Variáveis de ambiente e secrets (local + Streamlit Cloud)
+## 10. Configuração, secrets e deploy
 
-### Variáveis de ambiente úteis
+### 10.1 Variáveis de ambiente (local)
 
 | Variável | Efeito |
 |----------|--------|
-| `PASSOS_PARQUET` | Caminho absoluto para o Parquet a usar em vez do defeito |
+| `PASSOS_PARQUET` | Caminho absoluto para o Parquet a usar em vez do predefinido |
 | `OLLAMA_MODEL` | Nome do modelo no Ollama (ex.: `llama3`) |
 | `OLLAMA_BASE_URL` | URL do serviço Ollama (predefinição `http://127.0.0.1:11434`) |
 | `OLLAMA_NUM_CTX` | Tamanho do contexto (tokens) |
 | `OLLAMA_REQUEST_TIMEOUT` | Tempo máximo (segundos) por chamada ao Ollama (predefinição 120) |
 | `PM_RELATORIO_ANUAL_GAMMA_URL` | URL do relatório anual embebido |
 
-### Streamlit Cloud (`Secrets`)
+### 10.2 Secrets no Streamlit Community Cloud
 
-No painel da app → **Settings → Secrets**, podes definir (se aplicável) chaves com o **mesmo nome** das variáveis acima. Exemplo em TOML:
+No painel da app → **Settings → Secrets**, define chaves com o **mesmo nome** das variáveis acima, em TOML. Exemplo:
 
 ```toml
-# Caminho opcional no servidor Cloud (se carregares um Parquet para lá)
 # PASSOS_PARQUET = "/mount/.../dados.parquet"
 
 OLLAMA_MODEL = "llama3"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 ```
 
-**Nota:** no **Streamlit Community Cloud** o processo da app **não** vê o Ollama no teu PC — o Theo em LLM só funciona se tiveres um endpoint Ollama **alcançável a partir da internet** (não documentado por defeito) ou se usares **MVP sem chat LLM** (dashboards + risco + dados). Para vídeo com Theo completo, grava **local** ou numa VM onde Ollama e a app corram juntos.
+No **Streamlit Community Cloud** o processo **não** acede ao Ollama da máquina local. O chat com LLM local só funciona com um endpoint **público** (cenário avançado) ou em modo sem LLM (dashboards, risco, dados). Para demonstração completa do Theo, usar ambiente **local** ou VM com Ollama e a app no mesmo host.
 
-### Deploy no Streamlit Community Cloud (subir a app)
+### 10.3 Deploy na Streamlit Community Cloud
 
-1. Abre **[share.streamlit.io](https://share.streamlit.io)** e inicia sessão com **GitHub**.
-2. **Create app** → **Deploy a public app from GitHub** → escolhe o repositório **`J034ll4n/theo-educational-analytics-assistant`** (branch **`main`**).
-3. Em **Main file path** define **`app/main.py`** (a entrada da app está em `app/`, não na raiz).
-4. **App URL** (slug) escolhe um nome disponível; **Root directory** deixa em branco (raiz do repo).
-5. Abre **Advanced settings** e confirma **Python 3.12** (é a predefinição na [Community Cloud](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy); alinha com o ambiente local recomendado).
-6. Clica **Deploy** e espera o *build* (`requirements.txt`).
-7. **Dados na Cloud:** o repositório já inclui **`notebooks/Ml/relatorio_final.parquet`** e **`modelo_risco_aluno.pkl`** na raiz — a app deve arrancar sem ficheiros extra. Se quiseres outro Parquet, usa **Secrets** com `PASSOS_PARQUET` (caminho só faz sentido se montares ficheiro no espaço da Cloud; na prática comum é manter o Parquet no Git ou gerar com ETL noutro pipeline).
-8. **Theo (chat):** na Cloud o Ollama local **não** existe; verás a mensagem de indisponibilidade no chat. **Dashboards**, **risco**, **dicionário** e **relatório anual** continuam úteis para demo pública.
+1. [share.streamlit.io](https://share.streamlit.io) → sessão com **GitHub**.  
+2. **Create app** → repositório **`J034ll4n/theo-educational-analytics-assistant`**, branch **`main`**.  
+3. **Main file path:** `app/main.py`.  
+4. **Root directory:** vazio (raiz do repositório).  
+5. **Advanced settings** → **Python 3.12** (predefinição da Community Cloud; [documentação](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy)).  
+6. **Deploy** e aguardar o *build* de `requirements.txt`.  
 
-### Deploy reprodutível e dry-run
+O repositório inclui **`notebooks/Ml/relatorio_final.parquet`** e **`modelo_risco_aluno.pkl`** na raiz para arranque sem ficheiros adicionais. O chat Theo mostrará indisponibilidade de Ollama na Cloud; as restantes áreas permanecem utilizáveis para demo pública.
 
-1. Fixa dependências: `requirements.txt` já usa **versões fixas** (`==`); após instalar numa máquina limpa, podes gerar um *lock* completo com `pip freeze > requirements-lock.txt` para arquivo.
-2. **Dry-run da demo:** usa o **mesmo** `data/dados.parquet` (ou `PASSOS_PARQUET`) que vais mostrar no vídeo; corre `python scripts/etl.py` se partires do CSV; abre todas as páginas críticas (Chat, Risco, Dashboards) uma vez antes de gravar.
-3. Garante **`modelo_risco_aluno.pkl`** e **`dicionario.json`** na raiz conforme o teu ambiente de apresentação.
+### 10.4 Reprodutibilidade e dry-run
+
+1. `requirements.txt` fixa versões com `==`; opcionalmente gerar `pip freeze > requirements-lock.txt` após validação numa máquina limpa.  
+2. **Dry-run:** usar o mesmo Parquet da apresentação; executar `python scripts/etl.py` se a origem for CSV; percorrer Chat, Risco e Dashboards antes de gravar ou apresentar.  
+3. Confirmar **`modelo_risco_aluno.pkl`** e **`dicionario.json`** na raiz conforme o cenário de demo.
 
 ---
 
@@ -355,6 +453,4 @@ pytest tests/ -m ollama
 
 ---
 
-*Entrega desenvolvida no âmbito da formação em dados e impacto social — Passos Mágicos / FIAP.*
-
-**Made by Joe Allan Zirn**
+*Entrega no âmbito da formação em dados e impacto social — Passos Mágicos / FIAP · Joe Allan Zirn.*

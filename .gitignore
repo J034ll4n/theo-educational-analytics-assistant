@@ -35,6 +35,7 @@ Thumbs.db
 
 # Ambiente Python acidental dentro de notebooks (não versionar; usar .venv na raiz).
 notebooks/venv/
+notebooks/.vscode/
 
 # Artefatos gerados pelo projeto (ETL / treino — recriar com run.bat)
 data/dados.parquet

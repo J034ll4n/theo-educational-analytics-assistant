@@ -24,7 +24,7 @@ def test_build_ml_context_includes_ficha_when_feats() -> None:
     ctx = build_ml_context("Ana", "RA1", 0.42, shap, feats=feats)
     assert "INDE 7.5" in ctx
     assert "Fase 6" in ctx
-    assert "Lembrete do gráfico SHAP" in ctx
+    assert "Leitura do gráfico SHAP" in ctx
     assert "IDA" in ctx
 
 
@@ -34,4 +34,4 @@ def test_build_ml_context_without_feats() -> None:
 
     ctx = build_ml_context("Ana", "RA1", 0.42, [("IDA", 0.1)])
     assert "Valores principais na ficha" not in ctx
-    assert "Lembrete do gráfico SHAP" in ctx
+    assert "Leitura do gráfico SHAP" in ctx

@@ -10,7 +10,15 @@ from passos_magico.ml.risk_display import (
     OPERATIONAL_HIGH_RISK_THRESHOLD,
 )
 
-_SIM_COMPARE_KEYS: tuple[str, ...] = tuple(FEATURE_ORDER) + ("IAA", "IPS", "MAT", "POR", "Delta_INDE")
+_SIM_COMPARE_KEYS: tuple[str, ...] = tuple(FEATURE_ORDER) + (
+    "IAA",
+    "IPS",
+    "IPP",
+    "ING",
+    "MAT",
+    "POR",
+    "Delta_INDE",
+)
 
 
 def snapshot_sim_baseline(sim: dict[str, Any]) -> dict[str, float]:

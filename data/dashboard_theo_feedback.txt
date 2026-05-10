@@ -1,45 +1,43 @@
-DASHBOARD_FEEDBACK_META_JSON:{"fingerprint": "ded1b8290bb85345e282006fa449f21611d8798ea667ebb0ceaa7d20452859d0", "generated_at": "2026-05-09T21:25:49.615660+00:00"}
+DASHBOARD_FEEDBACK_META_JSON:{"fingerprint": "078721787292f511dc56e864daf06e1b333ce0f05033deeb50c640591ac12a7a", "generated_at": "2026-05-10T21:08:25.542538+00:00"}
 
 ## Panorama geral
 
-Este relatório apresenta um panorama geral dos indicadores educacionais da Passos Mágicos, baseado nos dados do período de 2022 a 2024. Com uma população de 1585 alunos únicos e uma média de 7.271 no INDE (Índice de Desenvolvimento Educacional), é possível notar um crescimento constante ao longo dos anos. Além disso, a média global do IEG (Engajamento) é de 8.2359, o que sugere uma boa adesão e comprometimento dos alunos com o processo educacional.
+Este relatório apresenta um panorama geral dos indicadores educacionais da Passos Mágicos, baseado nos dados do período de 2022 a 2024. Com uma população de 1585 alunos únicos e uma média de 7.271 no INDE (Índice de Desenvolvimento Educacional), é possível notar um crescimento constante ao longo dos anos. Além disso, a média global do IEG (Engajamento) é de 8.2359, o que sugere uma boa adesão e comprometimento dos alunos com a aprendizagem.
 
 ## Leitura dos indicadores e tendências
 
 ### INDE
-A média global do INDE é de 7.2715, com um desvio padrão de 0.9886. A análise por fase revela que os resultados melhoraram ao longo do tempo, especialmente nos anos 2023 e 2024. Além disso, a média por ano também mostra uma tendência ascendente.
+A média global do INDE é de 7.2715, com um desvio padrão de 0.9886. Ao longo dos anos, há uma tendência de melhoria moderada, com uma média por ano que aumenta gradualmente. É importante notar que a média por fase também apresenta uma tendência crescente.
 
 ### IDA
-A média global da IDA (Desempenho académico) é de 6.3772, com um desvio padrão de 1.9523. A análise por fase revela que os resultados variam ao longo do tempo, embora a média por ano mostre uma tendência moderada de melhoria.
+A média global do IDA (Desempenho académico) é de 6.3772, com um desvio padrão de 1.9523. Embora haja uma variação significativa ao longo dos anos, a média por ano apresenta uma tendência de melhoria ligeira.
 
 ### IAN
-A média global do IAN (Adequação ao nível) é de 7.0444, com um desvio padrão de 2.5109. A análise por fase revela que os resultados melhoraram ao longo do tempo, especialmente nos anos 2023 e 2024.
+A média global do IAN (Adequação ao nível) é de 7.0444, com um desvio padrão de 2.5109. A média por ano apresenta uma tendência crescente, o que sugere que os alunos estão se adequando cada vez melhor ao seu nível.
 
 ### IEG
-A média global do IEG (Engajamento) é de 8.2359, com um desvio padrão de 1.5644. A análise por fase revela que os resultados melhoraram ao longo do tempo, especialmente nos anos 2023 e 2024.
+A média global do IEG (Engajamento) é de 8.2359, com um desvio padrão de 1.5644. A média por ano apresenta uma tendência crescente, o que sugere que os alunos estão cada vez mais engajados e comprometidos com a aprendizagem.
 
 ### IPV
-A média global do IPV (Ponto de virada) é de 7.5433, com um desvio padrão de 1.0837. A análise por fase revela que os resultados melhoraram ao longo do tempo, especialmente nos anos 2023 e 2024.
+A média global do IPV (Ponto de virada) é de 7.5433, com um desvio padrão de 1.0837. A média por ano apresenta uma tendência crescente, o que sugere que os alunos estão se aproximando cada vez mais do ponto de virada.
 
 ### IPS
-A média global do IPS (Índice psicossocial) é de 6.2988, com um desvio padrão de 1.7846. A análise por fase revela que os resultados variam ao longo do tempo, embora a média por ano mostre uma tendência moderada de melhoria.
+A média global do IPS (Índice psicossocial) é de 6.2988, com um desvio padrão de 1.7846. Embora haja uma variação significativa ao longo dos anos, a média por ano apresenta uma tendência ligeira de melhoria.
 
 ### IPP
-A média global do IPP (Índice pedagógico complementar) é de 7.5679, com um desvio padrão de 0.9032. A análise por fase revela que os resultados melhoraram ao longo do tempo, especialmente nos anos 2023 e 2024.
+A média global do IPP (Índice pedagógico complementar) é de 7.5679, com um desvio padrão de 0.9032. A média por ano apresenta uma tendência crescente, o que sugere que os alunos estão se beneficiando cada vez mais da aprendizagem complementar.
 
 ### Risco
-A média global do risco (Probabilidade de alto risco) é de 0.2117, com um desvio padrão de 0.2620. A análise por fase revela que os resultados variam ao longo do tempo, embora a média por ano mostre uma tendência moderada de melhoria.
+A média global do risco (Probabilidade de alto risco) é de 0.3801, com um desvio padrão de 0.1725. Embora haja uma variação significativa ao longo dos anos, a média por ano apresenta uma tendência ligeira de melhoria.
 
 ## Risco e priorização
 
-A probabilidade de alto risco é baixa, com uma média global de 0.2117. No entanto, é importante notar que os resultados podem variar ao longo do tempo e que a escola deve estar atenta às tendências e mudanças nos dados.
+A probabilidade de alto risco é de 35,9%, o que sugere que há um risco moderado de problemas futuros. No entanto, é importante notar que a média por ano apresenta uma tendência crescente, o que sugere que os alunos estão se tornando cada vez mais resistentes ao estresse e à pressão.
 
 ## Recomendações
 
-1. Continuar a monitorar os indicadores educacionais para identificar áreas de melhoria e fortalecimento.
-2. Implementar estratégias para melhorar o desempenho acadêmico, especialmente na IDA.
-3. Fomentar o engajamento dos alunos com o processo educacional, utilizando técnicas e ferramentas que promovam a motivação e a participação.
-4. Desenvolver programas de apoio pedagógico complementar para os alunos que necessitam de ajuda adicional.
-5. Manter-se atento às tendências e mudanças nos dados, ajustando as estratégias e políticas educacionais quando necessário.
-
-Espero que este relatório tenha sido útil para a equipe pedagógica e direção da Passos Mágicos.
+1. Continuar a monitorar o desempenho dos alunos e ajustar as estratégias de ensino para melhor atender às suas necessidades.
+2. Fomentar a engajamento e comprometimento dos alunos com a aprendizagem, através de atividades extracurriculares e projetos que os motivem.
+3. Oferecer apoio pedagógico complementar aos alunos que precisam, para ajudá-los a se adequarem ao seu nível.
+4. Implementar estratégias de gestão do estresse e da pressão, para ajudar os alunos a gerenciar melhor seus problemas emocionais.
+5. Continuar a avaliar e ajustar as políticas educacionais da Passos Mágicos, para garantir que sejam eficazes e relevantes para os alunos.

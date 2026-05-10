@@ -74,7 +74,6 @@ from passos_magico.ml.features import (
 from passos_magico.ml.inference import (
     explain_row_shap,
     predict_risk_slice,
-    predict_row_after_simulation,
     predict_row_features,
 )
 from passos_magico.ml.risk_display import OPERATIONAL_HIGH_RISK_THRESHOLD
@@ -89,7 +88,6 @@ from passos_magico.semantic.metadata import (
     save_dictionary,
 )
 from passos_magico.ui.dashboard import render_dashboards
-from passos_magico.ui.risk_sim_copy import risk_explain_lines, sim_matches_base_ficha, snapshot_sim_baseline
 from passos_magico.ui.ranking_filters import (
     ranking_fase_options,
     ranking_mask,
@@ -114,8 +112,8 @@ PAGE_DEFS: list[tuple[str, str, str]] = [
     (
         "risk",
         "🎯  Previsão de risco",
-        "Ficha individual com SHAP e parecer do Theo; **matriz de priorização** com filtros por fase (1–8) e turma (A–E), "
-        "indicadores de recorte e exportação CSV. Simulação só no modo técnico (opcional).",
+        "Ficha individual com SHAP e parecer do Theo (**cenários quantificados** no texto); **matriz de priorização** com filtros "
+        "por fase (1–8) e turma (A–E), indicadores de recorte e exportação CSV.",
     ),
     (
         "dashboard",
@@ -693,43 +691,9 @@ def _get_engineered_row_for_display(
     df: pd.DataFrame, ra: str, ref_year: int | None = None
 ) -> pd.Series | None:
     """Linha alinhada a `row_features_from_df` (último ano ou `ref_year`), com engenharia do modelo de risco."""
-    from passos_magico.ml.features import single_row_for_ra_and_year
-    from passos_magico.ml.risk_pipeline import ensure_risk_engineering
+    from passos_magico.ml.risk_pipeline import engineered_row_for_display
 
-    ra_col = "RA" if "RA" in df.columns else "ra"
-    if ra_col not in df.columns:
-        return None
-    sub = df[df[ra_col].astype(str) == str(ra)]
-    if sub.empty:
-        return None
-    if ref_year is None:
-        key = pick_latest_year_row(sub).iloc[0]
-    else:
-        one = single_row_for_ra_and_year(df, ra, int(ref_year))
-        if one.empty:
-            return None
-        key = one.iloc[0]
-    y_val: float | None = None
-    for ac in ("ano_referencia", "Ano"):
-        if ac in key.index and pd.notna(key[ac]):
-            try:
-                y_val = float(key[ac])
-            except (TypeError, ValueError):
-                y_val = None
-            break
-    eng = ensure_risk_engineering(df)
-    if ra_col not in eng.columns:
-        return None
-    cand = eng[eng[ra_col].astype(str) == str(ra)].copy()
-    if y_val is not None:
-        for ac in ("ano_referencia", "Ano"):
-            if ac in cand.columns:
-                s = pd.to_numeric(cand[ac], errors="coerce")
-                cand = cand[s.sub(y_val).abs() < 0.51]
-                break
-    if cand.empty:
-        return None
-    return cand.iloc[0]
+    return engineered_row_for_display(df, ra, ref_year)
 
 
 def _fmt_pedagogy_num(val: Any, nd: int = 2) -> str:
@@ -798,7 +762,7 @@ def _render_pedagogy_context_trajectory(row: pd.Series | None) -> None:
         elif d <= 0.3:
             dist_detail = " Está **próximo da média** do grupo — o foco pode ser mais qualitativo (motivação, frequência, etc.)."
         else:
-            dist_detail = " Está **acima da média** do grupo neste recorte — manter o que funciona e cuidar do bem-estar."
+            dist_detail = " Está **acima da média** do grupo neste recorte."
 
     if delta_inde is None or (isinstance(delta_inde, float) and pd.isna(delta_inde)):
         traj_txt = "Não foi possível calcular a variação do INDE."
@@ -853,15 +817,15 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
     st.subheader("Previsão de risco escolar")
     st.markdown(
         "Probabilidade de **alto risco** (defasagem / evasão) a partir do relatório. "
-        "Não substitui a equipa pedagógica. **Aba 1:** ficha individual (contexto, SHAP, Theo). **Aba 2:** matriz de priorização "
-        "com filtros e exportação. **Simulação** só no modo técnico."
+        "Não substitui a equipa pedagógica. **Aba 1:** ficha individual (olhar pedagógico, SHAP, Theo com **cenários quantificados**). "
+        "**Aba 2:** matriz de priorização com filtros e exportação."
     )
-    with st.expander("Ajuda rápida (SHAP, 46%, simulação)", expanded=False):
+    with st.expander("Ajuda rápida (SHAP, 46%, Theo)", expanded=False):
         st.markdown(
             "- **Risco:** estimativa do modelo sobre a ficha; **≤46%** baixo, **46–65%** atenção, **>65%** mais acompanhamento.\n"
             "- **SHAP:** barra à **direita** da linha = aumenta o risco neste modelo; à **esquerda** = reduz.\n"
-            "- **Theo:** usa risco da ficha + SHAP; não inventa percentagens.\n"
-            "- **Modo técnico:** cenário «e se…»; a base **não** é alterada."
+            "- **Theo:** risco + SHAP + **cenários** já calculados pelo modelo (no texto).\n"
+            "- **Base:** só leitura; nada do painel grava no Parquet."
         )
 
     tab1, tab2 = st.tabs(["Análise individual", "Matriz de priorização"])
@@ -1012,8 +976,8 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
             st.markdown(
                 _risk_heading_html(
                     "4 · Parecer e orientação (Theo)",
-                    "Leitura em linguagem natural com base no **risco da ficha**, no gráfico SHAP e no contexto carregado. "
-                    "O Theo **não** inventa novas percentagens de risco nem substitui a equipe.",
+                    "Leitura com **risco da ficha**, SHAP (secção acima), **cenários já calculados pelo modelo** (no texto) e dicionário. "
+                    "O Theo **não** substitui a equipe.",
                 ),
                 unsafe_allow_html=True,
             )
@@ -1026,392 +990,16 @@ def render_risk(df: pd.DataFrame, bundle: dict[str, Any], theo_context_block: st
                     shap_pairs,
                     theo_context_block=_dict_ml,
                     feats=feats,
+                    bundle=bundle,
+                    df=df,
+                    eng_row=_eng_row,
                 )
                 st.markdown(diag)
-
-            with st.expander("Modo técnico: simulação manual (opcional)", expanded=False):
-                st.markdown(
-                    "**Aviso:** a simulação altera só os indicadores dos **controles**; outras variáveis do modelo podem "
-                    "permanecer alinhadas à **última ficha** na base — o resultado é **exploratório**, não substitui "
-                    "o risco oficial da secção 2. A base de dados **não** é alterada."
-                )
-                _sim_active = st.checkbox(
-                    "Ativar simulador (mostra os controles e recalcula a probabilidade)",
-                    value=False,
-                    key=f"pm_rsk_sim_on_{ra}_{int(feats['Ano'])}",
-                )
-                if not _sim_active:
-                    st.caption(
-                        "Ligue acima para abrir os **controles** e testar cenários em cima da ficha (sem gravar na base)."
-                    )
-                else:
-                    st.markdown(
-                        _risk_heading_html(
-                            "Simulador «e se…?»",
-                            "Deslize para testar outro cenário. **À direita** aparece o novo risco. Fase, turma, ano e pedra **seguem a ficha** (não dá para mudar aqui).",
-                            tight_top=True,
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    st.caption(
-                        "Cada alteração recalcula o modelo (IAA−IDA, distância à média da turma, Δ INDE). A base **não** é alterada."
-                    )
-
-                    sim = dict(base_feats)
-                    sim["IAA"] = _eng_float(_eng_row, "iaa", 5.0)
-                    sim["IPS"] = _eng_float(_eng_row, "ips", 5.0)
-                    sim["MAT"] = _eng_float(_eng_row, "mat", 5.0)
-                    sim["POR"] = _eng_float(_eng_row, "por", 5.0)
-                    sim["Delta_INDE"] = _eng_float(_eng_row, "delta_inde", 0.0)
-        
-                    _sim_baseline = snapshot_sim_baseline(sim)
-        
-                    st.info(
-                        "**Dica:** em cada bloco, o deslizador está na **faixa numérica** (ex.: 0 a 10). "
-                        "**Na ficha** = valor do relatório; **No controle** = valor que você está simulando agora. "
-                        "A porcentagem colorida só compara esses dois (verde = controle **maior** que a ficha)."
-                    )
-        
-                    col_ctrl, col_main = st.columns([0.42, 0.58], gap="medium")
-        
-                    with col_ctrl:
-                        st.markdown("##### Atitude (impacto alto)")
-                        st.markdown("**IEG — Engajamento** · escala 0 a 10")
-                        sim["IEG"] = st.slider(
-                            " ",
-                            0.0,
-                            10.0,
-                            float(sim["IEG"]),
-                            0.1,
-                            key="pm_rsk_ieg",
-                            label_visibility="collapsed",
-                            help="Arraste para mudar o engajamento em relação ao valor da ficha.",
-                        )
-                        st.markdown(
-                            _sim_ficha_controle_resumo_html(_sim_baseline, "IEG", sim["IEG"]),
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown("**IAA — Autoavaliação** · escala 0 a 10")
-                        sim["IAA"] = st.slider(
-                            " ",
-                            0.0,
-                            10.0,
-                            float(sim["IAA"]),
-                            0.1,
-                            key="pm_rsk_iaa",
-                            label_visibility="collapsed",
-                        )
-                        st.markdown(
-                            _sim_ficha_controle_resumo_html(_sim_baseline, "IAA", sim["IAA"]),
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown("**IPS — Psicossocial** · escala 0 a 10")
-                        sim["IPS"] = st.slider(
-                            " ",
-                            0.0,
-                            10.0,
-                            float(sim["IPS"]),
-                            0.1,
-                            key="pm_rsk_ips",
-                            label_visibility="collapsed",
-                        )
-                        st.markdown(
-                            _sim_ficha_controle_resumo_html(_sim_baseline, "IPS", sim["IPS"]),
-                            unsafe_allow_html=True,
-                        )
-        
-                        st.markdown("##### Acadêmico")
-                        st.markdown("**INDE** · escala 0 a 10")
-                        sim["INDE"] = st.slider(
-                            " ",
-                            0.0,
-                            10.0,
-                            float(sim["INDE"]),
-                            0.1,
-                            key="pm_rsk_inde",
-                            label_visibility="collapsed",
-                        )
-                        st.markdown(
-                            _sim_ficha_controle_resumo_html(_sim_baseline, "INDE", sim["INDE"]),
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown("**IDA — Aprendizagem** · escala 0 a 10")
-                        sim["IDA"] = st.slider(
-                            " ",
-                            0.0,
-                            10.0,
-                            float(sim["IDA"]),
-                            0.1,
-                            key="pm_rsk_ida",
-                            label_visibility="collapsed",
-                        )
-                        st.markdown(
-                            _sim_ficha_controle_resumo_html(_sim_baseline, "IDA", sim["IDA"]),
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown("**IAN** · escala 0 a 10")
-                        sim["IAN"] = st.slider(
-                            " ",
-                            0.0,
-                            10.0,
-                            float(sim["IAN"]),
-                            0.1,
-                            key="pm_rsk_ian",
-                            label_visibility="collapsed",
-                        )
-                        st.markdown(
-                            _sim_ficha_controle_resumo_html(_sim_baseline, "IAN", sim["IAN"]),
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown("**MAT** · escala 0 a 10")
-                        sim["MAT"] = st.slider(
-                            " ",
-                            0.0,
-                            10.0,
-                            float(sim["MAT"]),
-                            0.1,
-                            key="pm_rsk_mat",
-                            label_visibility="collapsed",
-                        )
-                        st.markdown(
-                            _sim_ficha_controle_resumo_html(_sim_baseline, "MAT", sim["MAT"]),
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown("**POR** · escala 0 a 10")
-                        sim["POR"] = st.slider(
-                            " ",
-                            0.0,
-                            10.0,
-                            float(sim["POR"]),
-                            0.1,
-                            key="pm_rsk_por",
-                            label_visibility="collapsed",
-                        )
-                        st.markdown(
-                            _sim_ficha_controle_resumo_html(_sim_baseline, "POR", sim["POR"]),
-                            unsafe_allow_html=True,
-                        )
-        
-                        st.markdown("##### Trajetória")
-                        st.markdown("**Δ INDE esperado** · escala −5 a +5")
-                        sim["Delta_INDE"] = st.slider(
-                            " ",
-                            -5.0,
-                            5.0,
-                            float(sim["Delta_INDE"]),
-                            0.1,
-                            key="pm_rsk_delta_inde",
-                            label_visibility="collapsed",
-                            help="Variação de INDE usada pelo modelo neste cenário.",
-                        )
-                        st.markdown(
-                            _sim_ficha_controle_resumo_html(
-                                _sim_baseline, "Delta_INDE", sim["Delta_INDE"], nd=2
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                        _choque_ui = float(sim["IAA"]) - float(sim["IDA"])
-                        st.caption(
-                            f"**IAA − IDA** neste cenário: **{_choque_ui:+.1f}**. "
-                            f"**Contexto fixo (só ficha, sem deslizador):** Fase **{int(base_feats['Fase'])}** · "
-                            f"Turma **{_turma_ord_to_letter(base_feats['Turma_ord'])}** · Ano **{int(base_feats['Ano'])}** · "
-                            f"Pedra **{_pedra_ord_to_name(base_feats['Pedra_ord'])}** · IPV **{float(sim['IPV']):.1f}**."
-                        )
-        
-                    new_p = predict_row_after_simulation(bundle, df, ra, sim)
-                    # Com os mesmos números da ficha, o caminho do simulador (reengenharia + derivadas) pode divergir
-                    # da entrada usada na secção 2 (`row_matrix_for_ficha_feats`). Forçamos o mesmo risco da ficha.
-                    if (
-                        new_p is not None
-                        and not (isinstance(new_p, float) and np.isnan(new_p))
-                        and sim_matches_base_ficha(sim, _sim_baseline)
-                    ):
-                        new_p = float(proba)
-        
-                    with col_main:
-                        if new_p is None or (isinstance(new_p, float) and np.isnan(new_p)):
-                            st.error("Não foi possível calcular o risco simulado para este RA.")
-                        else:
-                            delta_pp = (new_p - proba) * 100.0
-                            _sim_pct = float(new_p) * 100.0
-                            if abs(delta_pp) < 0.08:
-                                _sum_line = (
-                                    "**Quase igual** à ficha original — os números batem com o registo na base."
-                                    if sim_matches_base_ficha(sim, _sim_baseline)
-                                    else "**Pouca diferença** em relação à ficha: mexer nos controles quase não mudou o resultado."
-                                )
-                            elif delta_pp > 0:
-                                _sum_line = (
-                                    f"**Sobe cerca de {delta_pp:.1f} pontos** na escala de 0 a 100 em relação à ficha — "
-                                    "a estimativa fica **mais alta** do que no registo original."
-                                )
-                            else:
-                                _sum_line = (
-                                    f"**Desce cerca de {abs(delta_pp):.1f} pontos** na escala de 0 a 100 em relação à ficha — "
-                                    "a estimativa fica **mais baixa** do que no registo original (**só** vale o que os números "
-                                    "dos controles representam de verdade para o aluno)."
-                                )
-
-                            with st.container(border=True):
-                                st.markdown(
-                                    _risk_subheading_muted(
-                                        "Interpretação rápida",
-                                        "Tudo num só lugar: **ficha** = dados originais; **cenário** = o que você mudou nos deslizadores. "
-                                        "O **gráfico de fatores** acima mostra o que mais puxa o resultado neste aluno.",
-                                    ),
-                                    unsafe_allow_html=True,
-                                )
-
-                                crit46 = float(new_p) > OPERATIONAL_HIGH_RISK_THRESHOLD
-                                if crit46:
-                                    st.warning(
-                                        "**Zona de atenção:** neste cenário o modelo estima **mais de 46%** de probabilidade "
-                                        "de alto risco (na escala deste painel). Cruze com o que a escola observa e com o gráfico de fatores."
-                                    )
-                                else:
-                                    st.success(
-                                        "**Zona verde:** neste cenário o modelo fica **até 46%** nessa escala. "
-                                        "É um apoio à conversa — não substitui o olhar da equipe."
-                                    )
-
-                                m_ficha, m_cen = st.columns((1, 1), gap="small")
-                                with m_ficha:
-                                    st.metric(
-                                        label="Na ficha (original)",
-                                        value=f"{proba * 100:.1f}%",
-                                        help="Estimativa com os dados tal como estão na base, antes de mudar os controles.",
-                                    )
-                                with m_cen:
-                                    st.metric(
-                                        label="Neste cenário (controles)",
-                                        value=f"{_sim_pct:.1f}%",
-                                        help="Estimativa depois dos valores que você colocou nos deslizadores à esquerda.",
-                                    )
-
-                                if abs(delta_pp) < 0.08:
-                                    st.markdown(
-                                        f"**Em poucas palavras:** **{_sim_pct:.1f}%** com os controles atuais. {_sum_line}"
-                                    )
-                                else:
-                                    st.markdown(
-                                        f"**Em poucas palavras:** na ficha (**{proba * 100:.1f}%**) → com os controles (**{_sim_pct:.1f}%**). "
-                                        f"{_sum_line}"
-                                    )
-
-                                if abs(delta_pp) < 0.08:
-                                    if sim_matches_base_ficha(sim, _sim_baseline):
-                                        _delta_html = (
-                                            "<strong>Igual à ficha:</strong> os controles reproduzem o registo na base — "
-                                            "a percentagem coincide. <strong>Altere os indicadores</strong> para explorar outros cenários."
-                                        )
-                                    else:
-                                        _delta_html = (
-                                            "<strong>Quase igual à ficha:</strong> a diferença é menor que **0,1** na escala de 0 a 100 — "
-                                            "as mudanças nos controles pouco mexeram no resultado para este aluno."
-                                        )
-                                elif delta_pp > 0:
-                                    _delta_html = (
-                                        f"<strong>Diferença frente à ficha:</strong> cerca de <strong>{delta_pp:.1f}</strong> pontos "
-                                        "a <strong>mais</strong> na escala de 0 a 100 — a leitura automática associa isso a "
-                                        "<strong>mais</strong> chance estimada de defasagem ou evasão <em>se</em> estes números "
-                                        "refletirem o aluno."
-                                    )
-                                else:
-                                    _delta_html = (
-                                        f"<strong>Diferença frente à ficha:</strong> cerca de <strong>{abs(delta_pp):.1f}</strong> pontos "
-                                        "a <strong>menos</strong> na escala de 0 a 100 — a leitura automática associa isso a "
-                                        "<strong>menos</strong> chance estimada de defasagem ou evasão <em>se</em> estes números "
-                                        "refletirem o aluno."
-                                    )
-                                st.markdown(
-                                    f'<div class="pm-risk-delta-box">{_delta_html}</div>',
-                                    unsafe_allow_html=True,
-                                )
-                                st.caption(
-                                    "**Dica:** cada «ponto» na diferença = 1 unidade na escala de 0 a 100% (em relatórios técnicos chama-se "
-                                    "**ponto percentual**)."
-                                )
-
-                                st.markdown(
-                                    _risk_subheading_muted(
-                                        "Leituras que costumam ajudar",
-                                        "Ideias curtas com base nos números do cenário — **sempre** junto da equipe e do que a escola observa.",
-                                    ),
-                                    unsafe_allow_html=True,
-                                )
-                                for _line in risk_explain_lines(
-                                    float(new_p),
-                                    float(sim["Pedra_ord"]),
-                                    float(sim["IEG"]),
-                                    float(sim["IAA"]),
-                                    float(sim["IDA"]),
-                                ):
-                                    st.markdown(f"- {_line}")
-
-                                _media_tb = _media_turma_base_optional(_eng_row)
-                                st.markdown(
-                                    _risk_subheading_muted(
-                                        "INDE no cenário vs. média dos colegas (base)",
-                                        "A média compara com alunos no **mesmo contexto** na base (instituição, fase e ano).",
-                                    ),
-                                    unsafe_allow_html=True,
-                                )
-                                if _media_tb is not None:
-                                    _ymax = max(10.5, float(sim["INDE"]), float(_media_tb)) * 1.08
-                                    fig_cmp = go.Figure(
-                                        data=[
-                                            go.Bar(
-                                                x=["Aluno (simulado)", "Média turma (base)"],
-                                                y=[float(sim["INDE"]), float(_media_tb)],
-                                                marker_color=["#58a6ff", "#6e7681"],
-                                                text=[
-                                                    f"{float(sim['INDE']):.2f}",
-                                                    f"{float(_media_tb):.2f}",
-                                                ],
-                                                textposition="outside",
-                                            )
-                                        ]
-                                    )
-                                    fig_cmp.update_layout(
-                                        template="plotly_dark",
-                                        height=300,
-                                        margin=dict(l=48, r=28, t=48, b=48),
-                                        yaxis=dict(title="INDE", range=[0, _ymax]),
-                                        showlegend=False,
-                                        paper_bgcolor="rgba(13,17,23,0.25)",
-                                        plot_bgcolor="rgba(13,17,23,0.35)",
-                                    )
-                                    st.plotly_chart(fig_cmp, width="stretch", key=f"pm_rsk_bar_cmp_{ra}")
-                                    _gap_ind = float(sim["INDE"]) - float(_media_tb)
-                                    _gap_txt = (
-                                        f"INDE simulado **{float(sim['INDE']):.2f}** · média do grupo **{float(_media_tb):.2f}** · "
-                                        f"**Δ {_gap_ind:+.2f}** em relação à média."
-                                    )
-                                    if _gap_ind < -0.5:
-                                        st.caption(
-                                            _gap_txt
-                                            + " O aluno simulado fica **claramente abaixo** da média INDE do grupo — possível "
-                                            "«peixe fora d'água» no mesmo contexto (instituição/fase/ano na base)."
-                                        )
-                                    elif _gap_ind > 0.5:
-                                        _above = _gap_txt + " **Acima da média do grupo** neste recorte."
-                                        if float(new_p) > OPERATIONAL_HIGH_RISK_THRESHOLD:
-                                            _above += (
-                                                " O modelo **não resume só ao INDE** — outros fatores entram na probabilidade; "
-                                                "cruze com o SHAP e o olhar da equipe."
-                                            )
-                                        st.caption(_above)
-                                    else:
-                                        st.caption(_gap_txt + " **Próximo da média do grupo.**")
-                                else:
-                                    st.caption(
-                                        "Média da turma indisponível neste registro — não foi possível exibir o gráfico de barras da comparação."
-                                    )
 
         else:
             st.info(
                 "**Próximo passo:** escolhe um aluno na caixa acima (podes escrever ou colar o RA) para ver risco na ficha, "
-                "SHAP e parecer do Theo (e, se precisar, simulação no modo técnico)."
+                "SHAP, olhar pedagógico e parecer do Theo com cenários quantificados."
             )
 
     with tab2:

@@ -48,6 +48,8 @@ def test_sim_matches_base_baseline_roundtrip() -> None:
         "Pedra_ord": 3.0,
         "IAA": 7.5,
         "IPS": 7.0,
+        "IPP": 7.0,
+        "ING": 7.0,
         "MAT": 7.0,
         "POR": 8.0,
         "Delta_INDE": 0.0,
@@ -60,7 +62,24 @@ def test_sim_matches_base_baseline_roundtrip() -> None:
 
 
 def test_sim_matches_float_tolerance() -> None:
-    sim = {"Fase": 8.0, "Turma_ord": 4.0, "Ano": 2024.0, "INDE": 7.0, "IDA": 8.0, "IAN": 9.0, "IEG": 8.0, "IPV": 7.0, "Pedra_ord": 3.0, "IAA": 7.5, "IPS": 7.0, "MAT": 7.0, "POR": 8.0, "Delta_INDE": 0.0}
+    sim = {
+        "Fase": 8.0,
+        "Turma_ord": 4.0,
+        "Ano": 2024.0,
+        "INDE": 7.0,
+        "IDA": 8.0,
+        "IAN": 9.0,
+        "IEG": 8.0,
+        "IPV": 7.0,
+        "Pedra_ord": 3.0,
+        "IAA": 7.5,
+        "IPS": 7.0,
+        "IPP": 7.0,
+        "ING": 7.0,
+        "MAT": 7.0,
+        "POR": 8.0,
+        "Delta_INDE": 0.0,
+    }
     base = snapshot_sim_baseline(sim)
     sim2 = dict(sim)
     sim2["INDE"] = 7.02

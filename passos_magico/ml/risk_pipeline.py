@@ -8,7 +8,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from passos_magico.ml.features import latest_single_row_for_ra, single_row_for_ra_and_year
+from passos_magico.ml.features import (
+    latest_single_row_for_ra,
+    pick_latest_year_row,
+    single_row_for_ra_and_year,
+)
 
 RISK_NUM_FEATURES: list[str] = [
     "idade",
@@ -34,6 +38,7 @@ RISK_NUM_FEATURES: list[str] = [
     "choque_realidade",
     "esforco_sem_resultado",
     "mudanca_pedra",
+    "tem_ingles",
 ]
 RISK_CAT_FEATURES: list[str] = ["fase", "genero", "instituicao_de_ensino", "pedra"]
 RISK_MODEL_COLUMNS: list[str] = RISK_NUM_FEATURES + RISK_CAT_FEATURES
@@ -72,10 +77,17 @@ def _ensure_model_keys(d: pd.DataFrame) -> pd.DataFrame:
         ("ipv", "IPV"),
         ("iaa", "IAA"),
         ("ips", "IPS"),
+        ("ips", "ipsm"),
+        ("ips", "IPSM"),
         ("ipp", "IPP"),
+        ("ipp", "ippm"),
+        ("ipp", "IPPM"),
         ("mat", "MAT"),
         ("por", "POR"),
         ("ing", "ING"),
+        ("cg", "CG"),
+        ("cf", "CF"),
+        ("ct", "CT"),
         ("fase", "Fase"),
         ("turma", "Turma"),
         ("genero", "Genero"),
@@ -136,6 +148,21 @@ def _fill_idade_if_missing(out: pd.DataFrame) -> pd.DataFrame:
 def ensure_risk_engineering(df: pd.DataFrame) -> pd.DataFrame:
     """Replica engenharia do notebook para colunas ausentes no Parquet."""
     out = _fill_idade_if_missing(_ensure_model_keys(df.copy()))
+    # Alinhado ao treino (`ML_Passos_Magicos.ipynb`): indicador binário; Parquet antigo pode não trazer a coluna.
+    if "tem_ingles" not in out.columns:
+        out["tem_ingles"] = 0.0
+    else:
+        out["tem_ingles"] = pd.to_numeric(out["tem_ingles"], errors="coerce").fillna(0.0)
+    # Notebook (Transform): IPP ≈ média de CF e CT quando o indicador composto não veio no ficheiro.
+    if "cf" in out.columns and "ct" in out.columns:
+        cf_n = pd.to_numeric(out["cf"], errors="coerce")
+        ct_n = pd.to_numeric(out["ct"], errors="coerce")
+        proxy_ipp = (cf_n + ct_n) / 2.0
+        if "ipp" in out.columns:
+            ipp_n = pd.to_numeric(out["ipp"], errors="coerce")
+            out["ipp"] = ipp_n.where(ipp_n.notna(), proxy_ipp)
+        else:
+            out["ipp"] = proxy_ipp
     if "ra" not in out.columns or "ano_referencia" not in out.columns:
         return out
     if all(c in out.columns for c in RISK_MODEL_COLUMNS):
@@ -181,6 +208,67 @@ def ensure_risk_engineering(df: pd.DataFrame) -> pd.DataFrame:
         grp2 = out.groupby("ra", sort=False)
         out["mudanca_pedra"] = grp2["pedra_num"].diff().fillna(0)
     return out
+
+
+def engineered_row_for_display(df: pd.DataFrame, ra: str, ref_year: int | None = None) -> pd.Series | None:
+    """Mesma linha (RA + ano) que `row_features_from_df`, mas após `ensure_risk_engineering` para UI e simulador.
+
+    Ordem das colunas de ano alinhada a `_year_series_for_sort`: **Ano** primeiro, depois **ano_referencia**.
+    Evita filtrar pelo ano «errado» quando as duas colunas divergem na base.
+    """
+    ra_col = "RA" if "RA" in df.columns else "ra"
+    if ra_col not in df.columns:
+        return None
+    eng = ensure_risk_engineering(df)
+    if ra_col not in eng.columns:
+        return None
+    cand = eng[eng[ra_col].astype(str) == str(ra)].copy()
+    if cand.empty:
+        return None
+
+    if ref_year is not None:
+        yr = float(int(ref_year))
+        matched = None
+        for ac in ("Ano", "ano_referencia"):
+            if ac not in cand.columns:
+                continue
+            s = pd.to_numeric(cand[ac], errors="coerce")
+            slice_ok = cand[(s - yr).abs() < 0.51]
+            if not slice_ok.empty:
+                matched = slice_ok
+                break
+        if matched is None or matched.empty:
+            return None
+        cand = matched
+    else:
+        sub_raw = df[df[ra_col].astype(str) == str(ra)]
+        if sub_raw.empty:
+            return None
+        pick = pick_latest_year_row(sub_raw)
+        if pick.empty:
+            return None
+        y_last = None
+        for ac in ("Ano", "ano_referencia"):
+            if ac in pick.columns and pd.notna(pick.iloc[0][ac]):
+                try:
+                    y_last = float(pick.iloc[0][ac])
+                except (TypeError, ValueError):
+                    y_last = None
+                break
+        if y_last is None:
+            return cand.iloc[0]
+        matched = None
+        for ac in ("Ano", "ano_referencia"):
+            if ac not in cand.columns:
+                continue
+            s = pd.to_numeric(cand[ac], errors="coerce")
+            slice_ok = cand[(s - y_last).abs() < 0.51]
+            if not slice_ok.empty:
+                matched = slice_ok
+                break
+        if matched is not None and not matched.empty:
+            cand = matched
+    return cand.iloc[0]
 
 
 def is_sklearn_risk_pipeline(bundle: Any) -> bool:
@@ -317,7 +405,20 @@ def build_X_after_slider_simulation(df: pd.DataFrame, ra: str, sim: dict[str, fl
     if key not in df.columns:
         return None
     eng = ensure_risk_engineering(df.copy())
-    sub = latest_single_row_for_ra(eng, ra).copy()
+    # Alinhar ao ano da ficha na UI (`sim["Ano"]` == `row_features_from_df`); evitar misturar o último
+    # registo do RA com o ano que o utilizador está a ver na matriz/ficha.
+    resolved_year: int | None = None
+    if "Ano" in sim:
+        try:
+            resolved_year = int(round(float(sim["Ano"])))
+        except (TypeError, ValueError):
+            resolved_year = None
+    if resolved_year is not None:
+        sub = single_row_for_ra_and_year(eng, ra, resolved_year).copy()
+        if sub.empty:
+            sub = latest_single_row_for_ra(eng, ra).copy()
+    else:
+        sub = latest_single_row_for_ra(eng, ra).copy()
     if sub.empty:
         return None
     idx = sub.index[0]
@@ -348,6 +449,8 @@ def build_X_after_slider_simulation(df: pd.DataFrame, ra: str, sim: dict[str, fl
         ("IPV", "ipv"),
         ("IAA", "iaa"),
         ("IPS", "ips"),
+        ("IPP", "ipp"),
+        ("ING", "ing"),
         ("MAT", "mat"),
         ("POR", "por"),
     ]:

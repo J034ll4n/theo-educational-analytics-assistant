@@ -1,4 +1,54 @@
 # Passos Mágicos — Painel analítico e assistente Theo
+Como o repositório parece ser privado ou ainda não foi indexado publicamente nas buscas, não consigo acessar o código diretamente. Porém, olhando pelo nome (**"theo-educational-analytics-assistant"**), fica claro que se trata de um assistente inteligente voltado para análise de dados educacionais (provavelmente integrado com o Ollama executando localmente e usando Streamlit ou um executável empacotado).
+```markdown
+## 🚀 Como Executar o Théo Localmente
+
+Siga o passo a passo abaixo para clonar o repositório, preparar o ambiente e rodar o assistente de análise educacional na sua máquina.
+
+### 📋 Pré-requisitos
+
+Antes de começar, certifique-se de ter instalado e configurado:
+1. **Ollama:** Baixe e instale o [Ollama](https://ollama.com/). Ele é necessário para rodar os modelos de linguagem locais.
+2. **Modelo de LLM:** Certifique-se de baixar o modelo que o Théo utiliza. Com o Ollama rodando, execute o comando abaixo no seu terminal (exemplo com o Llama 3, ajuste para o modelo utilizado):
+   ```bash
+   ollama run llama3
+
+```
+
+3. **Git:** Caso queira clonar o projeto via linha de comando.
+
+---
+
+### 🛠️ Passo a Passo para Execução
+
+#### 1. Clonar o Repositório
+
+Abra o seu terminal e execute o comando abaixo para clonar o projeto:
+
+```bash
+git clone [https://github.com/J034ll4n/theo-educational-analytics-assistant.git](https://github.com/J034ll4n/theo-educational-analytics-assistant.git)
+
+```
+
+#### 2. Acessar a Pasta do Projeto
+
+Navegue até o diretório onde o projeto foi baixado:
+
+```bash
+cd theo-educational-analytics-assistant
+
+```
+
+#### 3. Verificar o Ollama
+
+Certifique-se de que o ícone do Ollama está ativo na sua barra de tarefas (rodando em segundo plano). O assistente precisa dele para processar as requisições de IA em tempo real.
+
+#### 4. Iniciar o Assistente
+
+Abra o gerenciador de arquivos do seu sistema, vá até a pasta do projeto e **execute o arquivo/ícone de inicialização** (duplo clique).
+
+Pronto! Agora você já pode testar todas as funcionalidades de análise de dados educacionais e interagir com o Théo localmente.
+
 
 **Autor:** Joe Allan Zirn · **Contexto:** projeto académico (Postech FIAP · Fase 5) — dados educacionais para apoio à decisão pedagógica.
 

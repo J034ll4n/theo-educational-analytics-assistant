@@ -9,7 +9,7 @@ Siga o passo a passo abaixo para clonar o repositório, preparar o ambiente e ro
 
 Antes de começar, certifique-se de ter instalado e configurado:
 1. **Ollama:** Baixe e instale o [Ollama](https://ollama.com/). Ele é necessário para rodar os modelos de linguagem locais.
-2. **Modelo de LLM:** Certifique-se de baixar o modelo que o Théo utiliza. Com o Ollama rodando, execute o comando abaixo no seu terminal (exemplo com o Llama 3, ajuste para o modelo utilizado):
+2. **Modelo de LLM:** Certifique-se de baixar o modelo que o Théo utiliza. Com o Ollama rodando, execute o comando abaixo no seu terminal Llama 3:
    ```bash
    ollama run llama3
 

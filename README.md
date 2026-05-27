@@ -45,10 +45,10 @@ Certifique-se de que o ícone do Ollama está ativo na sua barra de tarefas (rod
 
 #### 4. Iniciar o Assistente
 
-Abra o gerenciador de arquivos do seu sistema, vá até a pasta do projeto e **execute o arquivo/ícone de inicialização** (duplo clique).
+Abra o gerenciador de arquivos do seu sistema, vá até a pasta do projeto e **execute o arquivo/ícone de inicialização**.
 
 Pronto! Agora você já pode testar todas as funcionalidades de análise de dados educacionais e interagir com o Théo localmente.
-
+--
 
 **Autor:** Joe Allan Zirn · **Contexto:** projeto académico (Postech FIAP · Fase 5) — dados educacionais para apoio à decisão pedagógica.
 
